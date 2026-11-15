@@ -1,0 +1,85 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Linn-Player auswählen",
+        "description": "Wähle den Linn DSM (oder einen anderen OpenHome-Player), dessen Playlist befüllt werden soll.",
+        "data": { "renderer": "Player" }
+      },
+      "manual": {
+        "title": "Player manuell hinzufügen",
+        "description": "URL der UPnP-Gerätebeschreibung des Players, z. B. http://192.168.1.50:55178/Ds/device.xml",
+        "data": { "url": "URL der Gerätebeschreibung" }
+      },
+      "confirm": {
+        "title": "Linn-Player gefunden",
+        "description": "{name} einrichten?"
+      },
+      "servers": {
+        "title": "DLNA-Musikserver auswählen",
+        "description": "Wähle die Musikserver (z. B. MinimServer, Asset UPnP, Linn/Kazoo Server), deren Musik du auf {name} abspielen möchtest. Server, die nicht gefunden wurden, kannst du über die URL ihrer Gerätebeschreibung hinzufügen (mehrere durch Komma getrennt).",
+        "data": {
+          "server_selection": "Gefundene Musikserver",
+          "manual_servers": "Weitere Server (URL der Gerätebeschreibung)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zum Player fehlgeschlagen.",
+      "not_openhome": "Das Gerät bietet keinen OpenHome-Playlist-Dienst (kein Linn DS/DSM?).",
+      "cannot_connect_server": "Mindestens ein Server ist nicht erreichbar oder kein DLNA-Musikserver.",
+      "no_servers": "Bitte mindestens einen Musikserver auswählen."
+    },
+    "abort": {
+      "already_configured": "Dieser Player ist bereits eingerichtet.",
+      "cannot_connect": "Verbindung zum Player fehlgeschlagen."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Musikserver und Einstellungen",
+        "data": {
+          "server_selection": "Musikserver",
+          "manual_servers": "Weitere Server (URL der Gerätebeschreibung)",
+          "max_tracks": "Max. Titel pro Ladevorgang"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect_server": "Mindestens ein Server ist nicht erreichbar oder kein DLNA-Musikserver.",
+      "no_servers": "Bitte mindestens einen Musikserver auswählen."
+    }
+  },
+  "services": {
+    "load_media": {
+      "name": "In Linn-Playlist laden",
+      "description": "Lädt einen Titel, ein Album, einen Ordner oder eine Playlist eines DLNA-Servers in die Playlist des Linn.",
+      "fields": {
+        "media_content_id": {
+          "name": "Medien-ID",
+          "description": "ID aus dem Medienbrowser (beginnt mit dlnamusik://), eine media-source:// ID oder eine URL."
+        },
+        "mode": {
+          "name": "Modus",
+          "description": "Ersetzen, hinten anhängen, als nächstes einreihen oder sofort abspielen."
+        },
+        "play": {
+          "name": "Wiedergabe starten",
+          "description": "Wiedergabe nach dem Laden starten (Standard: bei Ersetzen und Abspielen)."
+        }
+      }
+    }
+  },
+  "selector": {
+    "mode": {
+      "options": {
+        "replace": "Playlist ersetzen",
+        "add": "Hinten anhängen",
+        "next": "Als Nächstes",
+        "play": "Sofort abspielen"
+      }
+    }
+  }
+}
