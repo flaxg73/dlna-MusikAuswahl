@@ -1,0 +1,24 @@
+load_media:
+  target:
+    entity:
+      integration: dlna_musikauswahl
+      domain: media_player
+  fields:
+    media_content_id:
+      required: true
+      example: "dlnamusik://uuid%3A1234/album%2042"
+      selector:
+        text:
+    mode:
+      default: replace
+      selector:
+        select:
+          translation_key: mode
+          options:
+            - replace
+            - add
+            - next
+            - play
+    play:
+      selector:
+        boolean:

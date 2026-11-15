@@ -1,0 +1,85 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Select Linn player",
+        "description": "Select the Linn DSM (or another OpenHome player) whose playlist should be filled.",
+        "data": { "renderer": "Player" }
+      },
+      "manual": {
+        "title": "Add player manually",
+        "description": "URL of the player's UPnP device description, e.g. http://192.168.1.50:55178/Ds/device.xml",
+        "data": { "url": "Device description URL" }
+      },
+      "confirm": {
+        "title": "Linn player found",
+        "description": "Set up {name}?"
+      },
+      "servers": {
+        "title": "Select DLNA music servers",
+        "description": "Select the music servers (e.g. MinimServer, Asset UPnP, Linn/Kazoo Server) you want to play on {name}. Servers that were not discovered can be added by the URL of their device description (comma separated).",
+        "data": {
+          "server_selection": "Discovered music servers",
+          "manual_servers": "Additional servers (device description URL)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the player.",
+      "not_openhome": "The device has no OpenHome Playlist service (not a Linn DS/DSM?).",
+      "cannot_connect_server": "At least one server is unreachable or not a DLNA media server.",
+      "no_servers": "Please select at least one music server."
+    },
+    "abort": {
+      "already_configured": "This player is already configured.",
+      "cannot_connect": "Failed to connect to the player."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Music servers and settings",
+        "data": {
+          "server_selection": "Music servers",
+          "manual_servers": "Additional servers (device description URL)",
+          "max_tracks": "Max. tracks per load"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect_server": "At least one server is unreachable or not a DLNA media server.",
+      "no_servers": "Please select at least one music server."
+    }
+  },
+  "services": {
+    "load_media": {
+      "name": "Load into Linn playlist",
+      "description": "Loads a track, album, folder or playlist of a DLNA server into the Linn playlist.",
+      "fields": {
+        "media_content_id": {
+          "name": "Media ID",
+          "description": "ID from the media browser (starts with dlnamusik://), a media-source:// ID or a URL."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Replace, append, play next or play now."
+        },
+        "play": {
+          "name": "Start playback",
+          "description": "Start playback after loading (default: for replace and play)."
+        }
+      }
+    }
+  },
+  "selector": {
+    "mode": {
+      "options": {
+        "replace": "Replace playlist",
+        "add": "Append",
+        "next": "Play next",
+        "play": "Play now"
+      }
+    }
+  }
+}
