@@ -43,6 +43,11 @@ selbst steuern.
   einen Titel ab, „Als Nächstes“ schiebt ihn hinter den aktuellen. Im Bearbeiten-Modus
   verschiebst du Titel (ziehen oder ▲/▼), entfernst einzelne oder mehrere und leerst die
   Playlist.
+- **Bibliothek-Karte fürs Dashboard** (`custom:linn-library-card`): Musikauswahl im gleichen
+  Stil. Du blätterst durch die Server mit Zurück-Pfad, Alben erscheinen als Cover-Raster, Titel
+  als Liste. Die Albumansicht hat einen Kopf mit „Abspielen / Als Nächstes / Hinzufügen“.
+  Dazu kommen Suche und ein Menü pro Eintrag. Die Karte zeigt, wie viele Titel geladen wurden,
+  und merkt sich, wo du zuletzt warst.
 - **Ordner „Aktuelle Linn-Playlist“** im Medienbrowser.
 - **Dienste** `load_media`, `play_track`, `move_track`, `remove_tracks` für Automationen
   und Skripte.
@@ -103,6 +108,31 @@ max_height: 480px        # optional: Höhe der Liste
 
 Falls die Karte nach einem Update nicht erscheint, lade die Seite einmal neu
 (Browser-Cache).
+
+### Bibliothek-Karte
+
+```yaml
+type: custom:linn-library-card
+entity: media_player.wohnzimmer
+title: Musik             # optional
+track_action: play       # Klick auf einen Titel: play | next | add | replace
+view: auto               # auto | grid | list
+max_height: 520px        # optional
+```
+
+- Ein Klick auf Ordner, Interpret oder Album öffnet es. ← geht zurück, ⌂ springt zum Anfang.
+  Bei nur einem Server startet die Karte direkt in dessen Hauptordner.
+- Albumansicht: **Abspielen** ersetzt die Playlist. ⤒ reiht das Album als nächstes ein,
+  + hängt es hinten an.
+- Ein Klick auf einen Titel führt `track_action` aus. Standard ist *Jetzt abspielen*: Der
+  Titel wird hinter dem laufenden eingefügt und gespielt, die Playlist bleibt erhalten.
+- ⋮ (oder Rechtsklick) öffnet das Menü: Jetzt abspielen, Als Nächstes, Hinzufügen,
+  Playlist ersetzen.
+- 🔍 sucht im aktuellen Server bzw. Ordner nach Titel, Album oder Interpret.
+- Große Ordner laden beim Scrollen automatisch nach.
+
+Tipp: Lege Bibliothek- und Playlist-Karte nebeneinander (z. B. in einer Ansicht vom Typ
+„Abschnitte“ oder in einem `horizontal-stack`).
 
 ### Medienbrowser
 
