@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 from homeassistant.components.media_player import (
     ATTR_MEDIA_CONTENT_ID,
     ATTR_MEDIA_CONTENT_TYPE,
@@ -314,3 +315,36 @@ async def test_options_flow(hass: HomeAssistant, fake: FakeUpnp) -> None:
     assert entry.options[CONF_MAX_TRACKS] == 250
     assert entry.options[CONF_SERVERS][0]["udn"] == SERVER_UDN
     assert entry.runtime_data.max_tracks == 250
+
+
+@pytest.mark.parametrize("quirk", ["no_res", "error"])
+async def test_broken_browse_metadata(hass: HomeAssistant, fake: FakeUpnp, quirk) -> None:
+    """Albums and tracks load although the server answers BrowseMetadata badly."""
+    await _setup(hass, fake)
+    fake.metadata_quirk = quirk
+    entity = _entity(hass)
+    albums = await entity.async_browse_media("playlist", _cid("albums"))
+    album1 = albums.children[0]
+    album = await entity.async_browse_media(album1.media_content_type, album1.media_content_id)
+    track = album.children[1]
+    assert "?parent=album1" in track.media_content_id
+
+    async def play(item, enqueue=MediaPlayerEnqueue.REPLACE):
+        await hass.services.async_call(
+            MP_DOMAIN, SERVICE_PLAY_MEDIA,
+            {ATTR_ENTITY_ID: ENTITY, ATTR_MEDIA_CONTENT_TYPE: item.media_content_type,
+             ATTR_MEDIA_CONTENT_ID: item.media_content_id, ATTR_MEDIA_ENQUEUE: enqueue},
+            blocking=True,
+        )
+
+    await play(album1)
+    assert len(fake.playlist) == 3
+    await play(track, MediaPlayerEnqueue.ADD)
+    assert len(fake.playlist) == 4 and fake.playlist[-1][1].endswith("album1-t2.flac")
+    # also via the service without type hint and without parent in the id
+    await hass.services.async_call(
+        DOMAIN, "load_media",
+        {ATTR_ENTITY_ID: ENTITY, "media_content_id": track.media_content_id, "mode": "add"},
+        blocking=True,
+    )
+    assert len(fake.playlist) == 5

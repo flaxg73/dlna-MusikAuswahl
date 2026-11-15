@@ -53,6 +53,7 @@ from .didl import (
     is_playable_audio_item,
     parse_duration,
     parse_metadata,
+    upnp_class_of,
 )
 from .dms import MediaServer
 from .openhome import OpenHomeRenderer, PlaylistTrack
@@ -80,12 +81,30 @@ _STATE_MAP = {
 
 
 # --------------------------------------------------------------------------- ids
-def make_content_id(udn: str, object_id: str, start: int = 0) -> str:
-    """Build a media_content_id for an object on a media server."""
+def make_content_id(
+    udn: str, object_id: str, start: int = 0, parent_id: str | None = None
+) -> str:
+    """Build a media_content_id for an object on a media server.
+
+    For items the id of the parent container is appended, so that the item
+    can be looked up in the listing it was selected from.
+    """
     content_id = f"{URI_SCHEME}://{quote(udn, safe='')}/{quote(object_id, safe='')}"
     if start:
         content_id += f"/{start}"
+    if parent_id:
+        content_id += f"?parent={quote(parent_id, safe='')}"
     return content_id
+
+
+def content_parent(content_id: str) -> str | None:
+    """Return the parent container id stored in a media_content_id."""
+    _, _, query = content_id.partition("?")
+    for part in query.split("&"):
+        key, _, value = part.partition("=")
+        if key == "parent" and value:
+            return unquote(value)
+    return None
 
 
 def parse_content_id(content_id: str) -> tuple[str, str, int]:
@@ -93,7 +112,7 @@ def parse_content_id(content_id: str) -> tuple[str, str, int]:
     prefix = f"{URI_SCHEME}://"
     if not content_id.startswith(prefix):
         raise ValueError(f"Not a {DOMAIN} media id: {content_id}")
-    parts = content_id[len(prefix) :].split("/")
+    parts = content_id[len(prefix) :].partition("?")[0].split("/")
     if len(parts) < 2 or not parts[0]:
         raise ValueError(f"Invalid media id: {content_id}")
     start = int(parts[2]) if len(parts) > 2 and parts[2] else 0
@@ -102,7 +121,7 @@ def parse_content_id(content_id: str) -> tuple[str, str, int]:
 
 def media_class_for(obj: didl_lite.DidlObject) -> MediaClass:
     """Map an UPnP class onto a Home Assistant media class."""
-    upnp_class = str(getattr(obj, "upnp_class", "") or "").lower()
+    upnp_class = upnp_class_of(obj)
     if upnp_class.startswith("object.container.album"):
         return MediaClass.ALBUM
     if upnp_class.startswith("object.container.person"):
@@ -400,13 +419,17 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         """Load media into the Linn playlist."""
         enqueue = kwargs.get(ATTR_MEDIA_ENQUEUE)
         mode = _ENQUEUE_TO_MODE.get(enqueue, MODE_REPLACE) if enqueue else MODE_REPLACE
-        await self.async_load_media(media_id, mode)
+        await self.async_load_media(media_id, mode, media_type=media_type)
 
     async def async_load_media(
-        self, media_content_id: str, mode: str = MODE_REPLACE, play: bool | None = None
+        self,
+        media_content_id: str,
+        mode: str = MODE_REPLACE,
+        play: bool | None = None,
+        media_type: str | None = None,
     ) -> None:
         """Service: load a track, album, folder or playlist into the Linn playlist."""
-        tracks = await self._async_tracks_for(media_content_id)
+        tracks = await self._async_tracks_for(media_content_id, media_type)
         if not tracks:
             raise ServiceValidationError(
                 f"No playable audio tracks found for {media_content_id}"
@@ -420,7 +443,9 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         _LOGGER.debug("Loaded %s tracks (%s) into %s", count, mode, self._entry.title)
         self.async_schedule_update_ha_state(True)
 
-    async def _async_tracks_for(self, media_id: str) -> list[PlaylistTrack]:
+    async def _async_tracks_for(
+        self, media_id: str, media_type: str | None = None
+    ) -> list[PlaylistTrack]:
         if media_id.startswith(f"{URI_SCHEME}://"):
             try:
                 udn, object_id, _start = parse_content_id(media_id)
@@ -428,7 +453,12 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                 raise ServiceValidationError(str(err)) from err
             server = self._server(udn)
             try:
-                return await server.async_collect_tracks(object_id, self._max_tracks)
+                return await server.async_collect_tracks(
+                    object_id,
+                    self._max_tracks,
+                    parent_id=content_parent(media_id),
+                    is_item=True if media_type == MediaType.TRACK else None,
+                )
             except CONNECT_ERRORS as err:
                 raise HomeAssistantError(
                     f"Media server {server.name} not reachable: {err}"
@@ -457,9 +487,18 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         return self._servers[udn]
 
     # ---------------------------------------------------------------- browse
-    def _browse_item(self, server: MediaServer, obj: didl_lite.DidlObject) -> BrowseMedia:
+    def _browse_item(
+        self,
+        server: MediaServer,
+        obj: didl_lite.DidlObject,
+        parent_id: str | None = None,
+    ) -> BrowseMedia:
         container = is_container(obj)
-        content_id = make_content_id(server.udn, obj.id)
+        content_id = make_content_id(
+            server.udn,
+            obj.id,
+            parent_id=None if container else (parent_id or obj.parent_id or None),
+        )
         thumbnail = None
         if art := server.absolute_url(album_art_uri(obj)):
             thumbnail = self.get_browse_image_url(MediaType.MUSIC, content_id, art)
@@ -527,18 +566,25 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             container_class = MediaClass.DIRECTORY
             thumbnail = None
         else:
-            meta = await server.async_metadata(object_id)
-            title = str(getattr(meta, "title", None) or object_id)
-            container_class = media_class_for(meta)
-            thumbnail = None
-            if art := server.absolute_url(album_art_uri(meta)):
+            title, container_class, thumbnail = object_id, MediaClass.DIRECTORY, None
+            try:
+                meta = await server.async_metadata(object_id)
+            except (*CONNECT_ERRORS, AssertionError, IndexError) as err:
+                # some servers answer BrowseMetadata badly; browsing still works
+                _LOGGER.debug("BrowseMetadata of %s failed: %s", object_id, err)
+                meta = None
+            if meta is not None:
+                title = str(getattr(meta, "title", None) or object_id)
+                if is_container(meta):
+                    container_class = media_class_for(meta)
+            if meta is not None and (art := server.absolute_url(album_art_uri(meta))):
                 thumbnail = self.get_browse_image_url(
                     MediaType.MUSIC, make_content_id(server.udn, object_id), art
                 )
 
         page = await server.async_browse(object_id, start, BROWSE_PAGE_SIZE)
         children = [
-            self._browse_item(server, child)
+            self._browse_item(server, child, object_id)
             for child in page.children
             if is_container(child) or is_playable_audio_item(child)
         ]

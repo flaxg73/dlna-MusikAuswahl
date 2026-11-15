@@ -239,6 +239,16 @@ class Library:
 
 
 # --------------------------------------------------------------------- server
+class SoapFault(Exception):
+    """UPnP error returned by a fake action."""
+
+    def __init__(self, code: int, text: str) -> None:
+        """Store code and description."""
+        super().__init__(text)
+        self.code = code
+        self.text = text
+
+
 class FakeUpnp:
     """HTTP server hosting both fake devices and recording their state."""
 
@@ -258,6 +268,8 @@ class FakeUpnp:
         self.shuffle = False
         self.repeat = False
         self.calls: list[str] = []
+        # simulate servers with broken BrowseMetadata: None | "no_res" | "error"
+        self.metadata_quirk: str | None = None
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -303,7 +315,22 @@ class FakeUpnp:
         action = action_el.tag.rsplit("}", 1)[-1]
         args = {child.tag.rsplit("}", 1)[-1]: child.text or "" for child in action_el}
         self.calls.append(f"{short}.{action}")
-        result = getattr(self, f"_{short}_{action}")(**args)
+        try:
+            result = getattr(self, f"_{short}_{action}")(**args)
+        except SoapFault as fault:
+            return web.Response(
+                status=500,
+                text=(
+                    '<?xml version="1.0"?><s:Envelope '
+                    'xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault>'
+                    "<faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring>"
+                    '<detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0">'
+                    f"<errorCode>{fault.code}</errorCode>"
+                    f"<errorDescription>{fault.text}</errorDescription>"
+                    "</UPnPError></detail></s:Fault></s:Body></s:Envelope>"
+                ),
+                content_type="text/xml",
+            )
         out = "".join(f"<{k}>{escape(str(v))}</{k}>" for k, v in result.items())
         return web.Response(
             text=(
@@ -467,6 +494,17 @@ class FakeUpnp:
         lib = self.library
         assert lib is not None
         if BrowseFlag == "BrowseMetadata":
+            if self.metadata_quirk == "error":
+                raise SoapFault(701, "No such object")
+            if self.metadata_quirk == "no_res":
+                obj = lib.objects[ObjectID]
+                result = (
+                    f'{DIDL_OPEN}<item id="{ObjectID}" restricted="1">'
+                    f"<dc:title>{escape(obj['title'])}</dc:title>"
+                    "<upnp:class>object.item</upnp:class></item></DIDL-Lite>"
+                )
+                return {"Result": result, "NumberReturned": 1, "TotalMatches": 1,
+                        "UpdateID": 1}
             ids = [ObjectID]
             total = 1
         else:
