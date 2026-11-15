@@ -45,7 +45,11 @@ from .const import (
     MODE_PLAY,
     MODE_REPLACE,
     SERVICE_LOAD_MEDIA,
+    SERVICE_MOVE_TRACK,
+    SERVICE_PLAY_TRACK,
+    SERVICE_REMOVE_TRACKS,
     URI_SCHEME,
+    URI_SCHEME_QUEUE,
 )
 from .didl import (
     album_art_uri,
@@ -57,6 +61,7 @@ from .didl import (
 )
 from .dms import MediaServer
 from .openhome import OpenHomeRenderer, PlaylistTrack
+from .playlist import PlaylistCache, QueueEntry
 from .upnp import CONNECT_ERRORS
 
 _LOGGER = logging.getLogger(__name__)
@@ -156,6 +161,24 @@ async def async_setup_entry(
         },
         "async_load_media",
     )
+    platform.async_register_entity_service(
+        SERVICE_PLAY_TRACK,
+        {vol.Required("track_id"): vol.Coerce(int)},
+        "async_play_track",
+    )
+    platform.async_register_entity_service(
+        SERVICE_REMOVE_TRACKS,
+        {vol.Required("track_ids"): vol.All(cv.ensure_list, [vol.Coerce(int)])},
+        "async_remove_tracks",
+    )
+    platform.async_register_entity_service(
+        SERVICE_MOVE_TRACK,
+        {
+            vol.Required("track_id"): vol.Coerce(int),
+            vol.Required("position"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        },
+        "async_move_track",
+    )
 
 
 class LinnPlaylistPlayer(MediaPlayerEntity):
@@ -186,6 +209,16 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         self._source_names: dict[str, int] = {}
         self._last_track_key: tuple[str, str] | None = None
         self._playlist_active = True
+        self._queue = PlaylistCache()
+        self._current_id = 0
+
+    async def async_added_to_hass(self) -> None:
+        """Make the entity reachable for the websocket API of the card."""
+        self.hass.data.setdefault(DOMAIN, {})[self.entity_id] = self
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister."""
+        self.hass.data.get(DOMAIN, {}).pop(self.entity_id, None)
 
     # ------------------------------------------------------------- features
     @staticmethod
@@ -246,6 +279,10 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         self._attr_available = True
 
     async def _async_poll(self, renderer: OpenHomeRenderer) -> None:
+        # the playlist is kept by the Linn, also in standby
+        await self._queue.refresh(renderer)
+        self._current_id = await renderer.current_id()
+
         if await renderer.standby():
             self._attr_state = MediaPlayerState.OFF
             self._clear_media()
@@ -331,8 +368,102 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose the configured servers."""
-        return {"media_servers": [server.name for server in self._servers.values()]}
+        """Expose servers and a summary of the playlist (the full list is in the card)."""
+        index = self._queue.index_of(self._current_id)
+        return {
+            "media_servers": [server.name for server in self._servers.values()],
+            "playlist_length": len(self._queue),
+            "playlist_version": self._queue.version,
+            "playlist_position": index + 1 if index is not None else None,
+            "current_track_id": self._current_id or None,
+        }
+
+    # -------------------------------------------------------------- playlist
+    def _art_url(self, art: str | None) -> str | None:
+        """Cover URL proxied through Home Assistant (avoids mixed content)."""
+        if not art or not self._is_server_host(art):
+            return None
+        return self.get_browse_image_url("cover", "cover", art)
+
+    def _is_server_host(self, url: str) -> bool:
+        host = urlparse(url).hostname
+        return host is not None and any(s.host == host for s in self._servers.values())
+
+    def _queue_entry_dict(self, entry: QueueEntry) -> dict[str, Any]:
+        return {
+            "id": entry.id,
+            "title": entry.title,
+            "artist": entry.artist,
+            "album": entry.album,
+            "duration": entry.duration,
+            "image": self._art_url(entry.art),
+        }
+
+    async def async_playlist_payload(self, refresh: bool = False) -> dict[str, Any]:
+        """Playlist for the Lovelace card (websocket API)."""
+        if refresh:
+            try:
+                renderer = await self._async_renderer()
+                await self._queue.refresh(renderer)
+                self._current_id = await renderer.current_id()
+            except CONNECT_ERRORS as err:
+                self._renderer = None
+                raise HomeAssistantError(f"Linn renderer not reachable: {err}") from err
+        return {
+            "version": self._queue.version,
+            "current_id": self._current_id or None,
+            "state": self.state,
+            "playlist_active": self._playlist_active,
+            "tracks": [self._queue_entry_dict(e) for e in self._queue.ordered()],
+        }
+
+    async def _async_queue_op(self, func) -> None:
+        try:
+            renderer = await self._async_renderer()
+            await func(renderer)
+            await self._queue.refresh(renderer)
+            self._current_id = await renderer.current_id()
+        except CONNECT_ERRORS as err:
+            self._renderer = None
+            raise HomeAssistantError(f"Linn renderer: {err}") from err
+        self.async_schedule_update_ha_state(True)
+
+    def _check_track(self, track_id: int) -> None:
+        if self._queue.index_of(track_id) is None:
+            raise ServiceValidationError(f"Track {track_id} is not in the Linn playlist")
+
+    async def async_play_track(self, track_id: int) -> None:
+        """Service: play a track of the playlist."""
+        self._check_track(track_id)
+
+        async def _play(renderer: OpenHomeRenderer) -> None:
+            await renderer.ensure_playlist_source()
+            await renderer.seek_id(track_id)
+            await renderer.play()
+
+        await self._async_queue_op(_play)
+
+    async def async_remove_tracks(self, track_ids: list[int]) -> None:
+        """Service: remove tracks from the playlist."""
+
+        async def _remove(renderer: OpenHomeRenderer) -> None:
+            for track_id in track_ids:
+                if self._queue.index_of(track_id) is not None:
+                    await renderer.delete_id(track_id)
+
+        await self._async_queue_op(_remove)
+
+    async def async_move_track(self, track_id: int, position: int) -> None:
+        """Service: move a track to a position (1 = top)."""
+        self._check_track(track_id)
+        others = [i for i in self._queue.ids if i != track_id]
+        position = min(position, len(others) + 1)
+        after_id = others[position - 2] if position > 1 else 0
+
+        async def _move(renderer: OpenHomeRenderer) -> None:
+            await renderer.move(track_id, after_id)
+
+        await self._async_queue_op(_move)
 
     # ------------------------------------------------------------- controls
     async def async_media_play(self) -> None:
@@ -417,6 +548,13 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         self, media_type: MediaType | str, media_id: str, **kwargs: Any
     ) -> None:
         """Load media into the Linn playlist."""
+        if media_id.startswith(f"{URI_SCHEME_QUEUE}://"):
+            try:
+                track_id = int(media_id[len(URI_SCHEME_QUEUE) + 3 :])
+            except ValueError as err:
+                raise ServiceValidationError(f"Invalid playlist id {media_id}") from err
+            await self.async_play_track(track_id)
+            return
         enqueue = kwargs.get(ATTR_MEDIA_ENQUEUE)
         mode = _ENQUEUE_TO_MODE.get(enqueue, MODE_REPLACE) if enqueue else MODE_REPLACE
         await self.async_load_media(media_id, mode, media_type=media_type)
@@ -519,10 +657,9 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
     ) -> BrowseMedia:
         """Browse the configured DLNA servers."""
         if not media_content_id or media_content_id == f"{URI_SCHEME}://":
-            if len(self._servers) == 1:
-                server = next(iter(self._servers.values()))
-                return await self._async_browse_container(server, "0", 0)
             return self._browse_root()
+        if media_content_id.startswith(f"{URI_SCHEME_QUEUE}://"):
+            return await self._async_browse_queue()
         try:
             udn, object_id, start = parse_content_id(media_content_id)
         except ValueError as err:
@@ -535,8 +672,45 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         except CONNECT_ERRORS as err:
             raise BrowseError(f"Media server {server.name} not reachable: {err}") from err
 
+    def _queue_folder(self) -> BrowseMedia:
+        return BrowseMedia(
+            media_class=MediaClass.PLAYLIST,
+            media_content_id=f"{URI_SCHEME_QUEUE}://",
+            media_content_type=MediaType.PLAYLIST,
+            title=f"Aktuelle Linn-Playlist ({len(self._queue)} Titel)",
+            can_play=False,
+            can_expand=True,
+        )
+
+    async def _async_browse_queue(self) -> BrowseMedia:
+        try:
+            await self.async_playlist_payload(refresh=True)
+        except HomeAssistantError as err:
+            raise BrowseError(str(err)) from err
+        children = []
+        for number, entry in enumerate(self._queue.ordered(), start=1):
+            marker = "▶ " if entry.id == self._current_id else ""
+            subtitle = " – ".join(x for x in (entry.artist, entry.album) if x)
+            image = self._art_url(entry.art)
+            children.append(
+                BrowseMedia(
+                    media_class=MediaClass.TRACK,
+                    media_content_id=f"{URI_SCHEME_QUEUE}://{entry.id}",
+                    media_content_type=MediaType.TRACK,
+                    title=f"{marker}{number}. {entry.title}"
+                    + (f" ({subtitle})" if subtitle else ""),
+                    can_play=True,
+                    can_expand=False,
+                    thumbnail=image,
+                )
+            )
+        folder = self._queue_folder()
+        folder.children = children
+        folder.children_media_class = MediaClass.TRACK
+        return folder
+
     def _browse_root(self) -> BrowseMedia:
-        children = [
+        children = [self._queue_folder()] + [
             BrowseMedia(
                 media_class=MediaClass.DIRECTORY,
                 media_content_id=make_content_id(server.udn, "0"),
@@ -626,6 +800,11 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         """Fetch cover art for the media browser through Home Assistant."""
         if not media_image_id:
             return None, None
+        if media_content_type == "cover":
+            # playlist covers: only from configured media servers
+            if not self._is_server_host(media_image_id):
+                return None, None
+            return await self._async_fetch_image(media_image_id)
         try:
             udn, _object_id, _start = parse_content_id(media_content_id)
         except ValueError:

@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/flaxg73/dlna-MusikAuswahl/main/custom_components/dlna_musikauswahl/brand/dark_logo@2x.png">
+    <img src="https://raw.githubusercontent.com/flaxg73/dlna-MusikAuswahl/main/custom_components/dlna_musikauswahl/brand/logo@2x.png" alt="Linn" width="300">
+  </picture>
+</p>
+
 # DLNA Musikauswahl für Home Assistant (Linn-Playlist)
 
 Eine Custom Integration für Home Assistant. Du durchsuchst damit einen oder mehrere
@@ -31,7 +38,14 @@ selbst steuern.
   Anzeige des aktuellen Titels mit Cover.
 - Der Linn wird beim Laden automatisch aus dem Standby geweckt und auf die Quelle
   *Playlist* umgeschaltet.
-- **Eigener Dienst `dlna_musikauswahl.load_media`** für Automationen und Skripte.
+- **Playlist-Karte fürs Dashboard** (`custom:linn-playlist-card`): Sie zeigt die Linn-Playlist
+  mit Cover, Interpret, Album und Dauer, der laufende Titel ist markiert. Per Klick spielst du
+  einen Titel ab, „Als Nächstes“ schiebt ihn hinter den aktuellen. Im Bearbeiten-Modus
+  verschiebst du Titel (ziehen oder ▲/▼), entfernst einzelne oder mehrere und leerst die
+  Playlist.
+- **Ordner „Aktuelle Linn-Playlist“** im Medienbrowser.
+- **Dienste** `load_media`, `play_track`, `move_track`, `remove_tracks` für Automationen
+  und Skripte.
 - **Automatische Erkennung** per SSDP. Ändert sich die IP-Adresse eines Geräts, wird es
   über seine UDN wiedergefunden.
 
@@ -65,6 +79,33 @@ Integration einfach mehrfach ein.
 
 ## Benutzung
 
+### Playlist-Karte
+
+Die Karte wird automatisch mitgeladen, du musst keine Ressource von Hand eintragen. Im
+Dashboard: *Bearbeiten → Karte hinzufügen → „Linn Playlist“* (unter „Benutzerdefiniert“),
+oder in YAML:
+
+```yaml
+type: custom:linn-playlist-card
+entity: media_player.wohnzimmer
+title: Playlist          # optional
+show_header: true        # optional: aktueller Titel mit Play/Pause/Vor/Zurück
+max_height: 480px        # optional: Höhe der Liste
+```
+
+- Klick auf einen Titel: abspielen. Das Symbol ⤒ (beim Überfahren) reiht den Titel als
+  nächsten ein.
+- ✎ öffnet den Bearbeiten-Modus. Dort Titel antippen oder ankreuzen, um sie auszuwählen
+  und gemeinsam zu entfernen. Verschieben geht mit ▲/▼ oder über den Griff ≡ am rechten
+  Rand. Mit ⌫ leerst du die ganze Playlist.
+- Hinweis: OpenHome kennt kein „Verschieben“. Der Titel wird entfernt und neu eingefügt.
+  Verschiebst du den laufenden Titel, beginnt er von vorn.
+
+Falls die Karte nach einem Update nicht erscheint, lade die Seite einmal neu
+(Browser-Cache).
+
+### Medienbrowser
+
 **Medienbrowser**: In der Seitenleiste *Medien* öffnen, unten rechts den Linn als Player
 wählen, Server → Album/Ordner/Titel auswählen. Mit ▶ wird abgespielt. Das Menü (⋮ bzw.
 „+“) bietet *Als Nächstes* und *Zur Warteschlange hinzufügen*.
@@ -83,12 +124,36 @@ data:
   play: true        # optional
 ```
 
+Weitere Dienste zum Bearbeiten der Playlist (die Titel-IDs liefert die Karte bzw. das Attribut
+`current_track_id`):
+
+```yaml
+action: dlna_musikauswahl.move_track      # Titel an Position 1 verschieben
+target: { entity_id: media_player.wohnzimmer }
+data: { track_id: 42, position: 1 }
+---
+action: dlna_musikauswahl.remove_tracks
+target: { entity_id: media_player.wohnzimmer }
+data: { track_ids: [42, 43] }
+---
+action: dlna_musikauswahl.play_track
+target: { entity_id: media_player.wohnzimmer }
+data: { track_id: 42 }
+```
+
+Die Entität hat zusätzlich die Attribute `playlist_length`, `playlist_position` und
+`current_track_id`.
+
 `media_player.play_media` funktioniert ebenfalls, inklusive `enqueue: add|next|play|replace`.
 Neben `dlnamusik://`-IDs nimmt der Dienst auch `media-source://`-IDs (z. B. vom
 Home-Assistant-Medienordner oder der Core-Integration *DLNA Digital Media Server*) und
 direkte HTTP-URLs an. Diese werden als einzelner Titel eingefügt.
 
 ## Hinweise
+
+- Das Linn-Logo dient nur zur Kennzeichnung der unterstützten Geräte. Linn ist eine Marke
+  von Linn Products Ltd.; dieses Projekt ist kein offizielles Linn-Produkt und steht in keiner
+  Verbindung zu Linn.
 
 - Home Assistant muss Linn und Musikserver per Multicast (SSDP) erreichen, sonst klappt
   die automatische Erkennung nicht. Läuft HA in Docker, ist dafür `network_mode: host`

@@ -30,6 +30,7 @@ ST_MEDIA_SERVERS: Final = (
 
 # Media browser
 URI_SCHEME: Final = "dlnamusik"
+URI_SCHEME_QUEUE: Final = "dlnamusik-queue"
 BROWSE_PAGE_SIZE: Final = 250
 MAX_RECURSION_DEPTH: Final = 6
 
@@ -41,5 +42,11 @@ MODE_PLAY: Final = "play"
 LOAD_MODES: Final = (MODE_REPLACE, MODE_ADD, MODE_NEXT, MODE_PLAY)
 
 SERVICE_LOAD_MEDIA: Final = "load_media"
+SERVICE_PLAY_TRACK: Final = "play_track"
+SERVICE_REMOVE_TRACKS: Final = "remove_tracks"
+SERVICE_MOVE_TRACK: Final = "move_track"
+
+CARD_URL: Final = "/dlna_musikauswahl/linn-playlist-card.js"
+CARD_VERSION: Final = "0.2.0"
 ATTR_MODE: Final = "mode"
 ATTR_PLAY: Final = "play"
