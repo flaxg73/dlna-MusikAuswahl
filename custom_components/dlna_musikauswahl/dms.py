@@ -8,12 +8,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from async_upnp_client.exceptions import UpnpActionError, UpnpActionResponseError
 from async_upnp_client.profiles.dlna import DmsDevice
 from didl_lite import didl_lite
 from homeassistant.core import HomeAssistant
 
 from .const import MAX_RECURSION_DEPTH, SERVER_LOCATION, SERVER_NAME, SERVER_UDN
-from .didl import is_container, is_playable_audio_item, item_metadata, pick_audio_resource
+from .didl import (
+    describe,
+    is_container,
+    is_playable_audio_item,
+    item_metadata,
+    pick_audio_resource,
+)
 from .openhome import PlaylistTrack
 from .upnp import CONNECT_ERRORS, async_connect
 
@@ -64,6 +71,9 @@ class MediaServer:
         """Run a call against the device, reconnecting once if it fails."""
         try:
             return await func(await self._async_device())
+        except (UpnpActionError, UpnpActionResponseError):
+            # the server answered, just not with success: no reason to reconnect
+            raise
         except CONNECT_ERRORS as err:
             _LOGGER.debug("Request to %s failed (%s), reconnecting", self.name, err)
             self._device = None
@@ -129,15 +139,75 @@ class MediaServer:
 
         return await self._async_retry(_search)
 
-    async def async_collect_tracks(self, object_id: str, limit: int) -> list[PlaylistTrack]:
-        """Collect playable tracks of an item or (recursively) a container."""
-        obj = await self.async_metadata(object_id)
+    async def async_collect_tracks(
+        self,
+        object_id: str,
+        limit: int,
+        parent_id: str | None = None,
+        is_item: bool | None = None,
+    ) -> list[PlaylistTrack]:
+        """Collect playable tracks of an item or (recursively) a container.
+
+        BrowseMetadata is not used to decide what an object is: several servers
+        answer it incompletely (no <res>, wrong class). Containers are detected
+        by browsing their children, items are taken from the listing of their
+        parent, exactly as they were shown in the media browser.
+        """
         tracks: list[PlaylistTrack] = []
-        if not is_container(obj):
-            track = self.to_track(obj)
-            return [track] if track else []
-        await self._async_collect(object_id, tracks, limit, 0)
-        return tracks
+
+        # 1. container? (skipped when the media browser told us it is a track)
+        if not is_item:
+            try:
+                await self._async_collect(object_id, tracks, limit, 0)
+            except CONNECT_ERRORS as err:
+                _LOGGER.debug("BrowseDirectChildren of %s failed: %s", object_id, err)
+            if tracks:
+                return tracks
+
+        # 2. item: metadata of the object itself
+        obj: didl_lite.DidlObject | None = None
+        try:
+            obj = await self.async_metadata(object_id)
+        except (*CONNECT_ERRORS, AssertionError, IndexError) as err:
+            _LOGGER.debug("BrowseMetadata of %s failed: %s", object_id, err)
+        if obj is not None:
+            if track := self.to_track(obj):
+                return [track]
+            parent_id = parent_id or getattr(obj, "parent_id", None)
+
+        # 3. item: look it up in the listing of its parent container
+        if parent_id and parent_id != "-1":
+            if track := await self._async_find_in_parent(parent_id, object_id):
+                return [track]
+
+        _LOGGER.warning(
+            "No playable audio found for object %r on %s (parent %r). Metadata: %s",
+            object_id,
+            self.name,
+            parent_id,
+            describe(obj) if obj is not None else "-",
+        )
+        return []
+
+    async def _async_find_in_parent(
+        self, parent_id: str, object_id: str
+    ) -> PlaylistTrack | None:
+        start = 0
+        while True:
+            try:
+                page = await self.async_browse(parent_id, start, COLLECT_PAGE_SIZE)
+            except CONNECT_ERRORS as err:
+                _LOGGER.debug("Browsing parent %s failed: %s", parent_id, err)
+                return None
+            for child in page.children:
+                if child.id == object_id:
+                    track = self.to_track(child)
+                    if track is None:
+                        _LOGGER.debug("Object in parent listing: %s", describe(child))
+                    return track
+            start += len(page.children)
+            if not page.children or start >= page.total:
+                return None
 
     async def _async_collect(
         self, object_id: str, tracks: list[PlaylistTrack], limit: int, depth: int

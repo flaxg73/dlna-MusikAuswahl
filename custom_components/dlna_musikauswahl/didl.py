@@ -23,11 +23,27 @@ _DIDL_FOOTER = "</DIDL-Lite>"
 AUDIO_MIME_PREFIXES = ("audio/", "application/ogg", "application/flac")
 
 
+def upnp_class_of(obj: didl_lite.DidlObject) -> str:
+    """Return the normalised (stripped, lower case) UPnP class of an object."""
+    return str(getattr(obj, "upnp_class", "") or "").strip().lower()
+
+
 def is_container(obj: didl_lite.DidlObject) -> bool:
     """Return True if the object is a container (folder, album, ...)."""
-    return isinstance(obj, didl_lite.Container) or str(
-        getattr(obj, "upnp_class", "") or ""
-    ).startswith("object.container")
+    return isinstance(obj, didl_lite.Container) or upnp_class_of(obj).startswith(
+        "object.container"
+    )
+
+
+def describe(obj: didl_lite.DidlObject) -> str:
+    """Short description of an object for log messages."""
+    resources = [
+        f"{res.protocol_info!r} -> {res.uri!r}" for res in getattr(obj, "res", None) or []
+    ]
+    return (
+        f"type={type(obj).__name__} id={getattr(obj, 'id', None)!r} "
+        f"class={getattr(obj, 'upnp_class', None)!r} res={resources}"
+    )
 
 
 def pick_audio_resource(obj: didl_lite.DidlObject) -> didl_lite.Resource | None:
@@ -36,18 +52,16 @@ def pick_audio_resource(obj: didl_lite.DidlObject) -> didl_lite.Resource | None:
     for res in getattr(obj, "res", None) or []:
         if not res.uri:
             continue
-        parts = (res.protocol_info or "").split(":")
-        protocol = parts[0].lower() if parts else ""
-        mime = parts[2].lower() if len(parts) > 2 else ""
-        if protocol not in ("http-get", ""):
+        parts = (res.protocol_info or "").strip().split(":")
+        protocol = parts[0].strip().lower() if parts else ""
+        mime = parts[2].strip().lower() if len(parts) > 2 else ""
+        if protocol not in ("http-get", "http", "*", ""):
             continue
         if mime.startswith(AUDIO_MIME_PREFIXES):
             return res
         if fallback is None and not mime.startswith(("image/", "video/", "text/")):
             fallback = res
-    if fallback is not None and str(
-        getattr(obj, "upnp_class", "") or ""
-    ).startswith("object.item.audioItem"):
+    if fallback is not None and upnp_class_of(obj).startswith("object.item.audioitem"):
         return fallback
     return None
 
