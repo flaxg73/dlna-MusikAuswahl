@@ -22,3 +22,50 @@ load_media:
     play:
       selector:
         boolean:
+
+play_track:
+  target:
+    entity:
+      integration: dlna_musikauswahl
+      domain: media_player
+  fields:
+    track_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 4294967295
+          mode: box
+
+remove_tracks:
+  target:
+    entity:
+      integration: dlna_musikauswahl
+      domain: media_player
+  fields:
+    track_ids:
+      required: true
+      example: "[12, 13]"
+      selector:
+        object:
+
+move_track:
+  target:
+    entity:
+      integration: dlna_musikauswahl
+      domain: media_player
+  fields:
+    track_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 4294967295
+          mode: box
+    position:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 1000
+          mode: box

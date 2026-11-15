@@ -149,7 +149,10 @@ async def test_browse(hass: HomeAssistant, fake: FakeUpnp) -> None:
     entity = _entity(hass)
 
     root = await entity.async_browse_media()
-    assert [c.title for c in root.children] == ["Alben", "Alle Titel"]
+    assert [c.title for c in root.children] == [
+        "Aktuelle Linn-Playlist (0 Titel)", "MinimServer"]
+    server_root = await entity.async_browse_media("playlist", root.children[1].media_content_id)
+    assert [c.title for c in server_root.children] == ["Alben", "Alle Titel"]
 
     albums = await entity.async_browse_media("playlist", _cid("albums"))
     assert [c.title for c in albums.children] == ["Album 1", "Album 2"]
@@ -348,3 +351,118 @@ async def test_broken_browse_metadata(hass: HomeAssistant, fake: FakeUpnp, quirk
         blocking=True,
     )
     assert len(fake.playlist) == 5
+
+
+async def _load(hass: HomeAssistant, object_id: str, mode: str = "add") -> None:
+    await hass.services.async_call(
+        DOMAIN, "load_media",
+        {ATTR_ENTITY_ID: ENTITY, "media_content_id": _cid(object_id), "mode": mode},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+
+def _order(fake: FakeUpnp) -> list[str]:
+    return [u.rsplit("/", 1)[1].removesuffix(".flac") for _, u, _ in fake.playlist]
+
+
+async def test_playlist_websocket_and_services(
+    hass: HomeAssistant, fake: FakeUpnp, hass_ws_client
+) -> None:
+    """The card reads the playlist via websocket and edits it via services."""
+    await _setup(hass, fake)
+    await _load(hass, "album1", "replace")
+    await _load(hass, "album2")
+    assert _order(fake) == ["album1-t1", "album1-t2", "album1-t3",
+                            "album2-t1", "album2-t2", "album2-t3"]
+    state = hass.states.get(ENTITY)
+    assert state.attributes["playlist_length"] == 6
+    assert state.attributes["playlist_position"] == 1
+    assert state.attributes["current_track_id"] == fake.playlist[0][0]
+
+    client = await hass_ws_client(hass)
+    await client.send_json(
+        {"id": 1, "type": "dlna_musikauswahl/playlist", "entity_id": ENTITY, "refresh": True}
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    tracks = msg["result"]["tracks"]
+    assert [t["title"] for t in tracks][:2] == ["Track 1.1", "Track 1.2"]
+    assert tracks[0]["artist"] == "The Band" and tracks[0]["album"] == "Album 1"
+    assert tracks[0]["duration"] == 245
+    assert tracks[0]["image"].startswith(f"/api/media_player_proxy/{ENTITY}/browse_media/cover/")
+    assert msg["result"]["current_id"] == tracks[0]["id"]
+
+    # proxied cover works for configured server hosts only
+    entity = _entity(hass)
+    assert (await entity.async_get_browse_image(
+        "cover", "cover", f"{fake.base}/art/album1.jpg"))[1] == "image/jpeg"
+    assert await entity.async_get_browse_image(
+        "cover", "cover", "http://evil.example/a.jpg") == (None, None)
+
+    async def svc(service, **data):
+        await hass.services.async_call(
+            DOMAIN, service, {ATTR_ENTITY_ID: ENTITY, **data}, blocking=True
+        )
+        await hass.async_block_till_done()
+
+    ids = [i for i, _, _ in fake.playlist]
+    await svc("move_track", track_id=ids[5], position=1)
+    assert _order(fake)[0] == "album2-t3" and len(fake.playlist) == 6
+    await svc("move_track", track_id=fake.playlist[1][0], position=99)  # album1-t1 to end
+    assert _order(fake) == ["album2-t3", "album1-t2", "album1-t3",
+                            "album2-t1", "album2-t2", "album1-t1"]
+    # album1-t1 was playing: playback continues with the moved track
+    assert fake.current_id == fake.playlist[-1][0] and fake.transport == "Playing"
+
+    await svc("play_track", track_id=fake.playlist[2][0])
+    assert fake.current_id == fake.playlist[2][0]
+
+    await svc("remove_tracks", track_ids=[fake.playlist[0][0], fake.playlist[1][0]])
+    assert _order(fake) == ["album1-t3", "album2-t1", "album2-t2", "album1-t1"]
+    assert hass.states.get(ENTITY).attributes["playlist_length"] == 4
+
+    with pytest.raises(Exception, match="not in the Linn playlist"):
+        await svc("play_track", track_id=9999)
+
+    await client.send_json({"id": 2, "type": "dlna_musikauswahl/playlist", "entity_id": ENTITY})
+    msg = await client.receive_json()
+    assert [t["title"] for t in msg["result"]["tracks"]] == [
+        "Track 1.3", "Track 2.1", "Track 2.2", "Track 1.1"]
+
+    await client.send_json(
+        {"id": 3, "type": "dlna_musikauswahl/playlist", "entity_id": "media_player.nope"}
+    )
+    msg = await client.receive_json()
+    assert not msg["success"] and msg["error"]["code"] == "not_found"
+
+
+async def test_browse_and_play_queue(hass: HomeAssistant, fake: FakeUpnp) -> None:
+    """The Linn playlist is a folder in the media browser."""
+    await _setup(hass, fake)
+    await _load(hass, "album1", "replace")
+    entity = _entity(hass)
+    root = await entity.async_browse_media()
+    assert root.children[0].title == "Aktuelle Linn-Playlist (3 Titel)"
+    queue = await entity.async_browse_media("playlist", root.children[0].media_content_id)
+    assert [c.title for c in queue.children] == [
+        "▶ 1. Track 1.1 (The Band – Album 1)",
+        "2. Track 1.2 (The Band – Album 1)",
+        "3. Track 1.3 (The Band – Album 1)",
+    ]
+    await hass.services.async_call(
+        MP_DOMAIN, SERVICE_PLAY_MEDIA,
+        {ATTR_ENTITY_ID: ENTITY, ATTR_MEDIA_CONTENT_TYPE: "track",
+         ATTR_MEDIA_CONTENT_ID: queue.children[2].media_content_id},
+        blocking=True,
+    )
+    assert fake.current_id == fake.playlist[2][0] and len(fake.playlist) == 3
+
+
+async def test_card_is_served(hass: HomeAssistant, fake: FakeUpnp, hass_client) -> None:
+    """The Lovelace card is served by the integration."""
+    await _setup(hass, fake)
+    client = await hass_client()
+    resp = await client.get("/dlna_musikauswahl/linn-playlist-card.js")
+    assert resp.status == 200
+    assert "customElements.define(\"linn-playlist-card\"" in await resp.text()

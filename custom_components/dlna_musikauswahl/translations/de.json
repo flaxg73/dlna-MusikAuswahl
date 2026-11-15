@@ -5,12 +5,16 @@
       "user": {
         "title": "Linn-Player auswählen",
         "description": "Wähle den Linn DSM (oder einen anderen OpenHome-Player), dessen Playlist befüllt werden soll.",
-        "data": { "renderer": "Player" }
+        "data": {
+          "renderer": "Player"
+        }
       },
       "manual": {
         "title": "Player manuell hinzufügen",
         "description": "URL der UPnP-Gerätebeschreibung des Players, z. B. http://192.168.1.50:55178/Ds/device.xml",
-        "data": { "url": "URL der Gerätebeschreibung" }
+        "data": {
+          "url": "URL der Gerätebeschreibung"
+        }
       },
       "confirm": {
         "title": "Linn-Player gefunden",
@@ -68,6 +72,40 @@
         "play": {
           "name": "Wiedergabe starten",
           "description": "Wiedergabe nach dem Laden starten (Standard: bei Ersetzen und Abspielen)."
+        }
+      }
+    },
+    "play_track": {
+      "name": "Titel der Playlist abspielen",
+      "description": "Springt in der Linn-Playlist zum angegebenen Titel und spielt ihn ab.",
+      "fields": {
+        "track_id": {
+          "name": "Titel-ID",
+          "description": "ID des Titels in der Linn-Playlist (siehe Playlist-Karte oder Attribut current_track_id)."
+        }
+      }
+    },
+    "remove_tracks": {
+      "name": "Titel aus der Playlist entfernen",
+      "description": "Entfernt einen oder mehrere Titel aus der Linn-Playlist.",
+      "fields": {
+        "track_ids": {
+          "name": "Titel-IDs",
+          "description": "Liste der IDs der zu entfernenden Titel."
+        }
+      }
+    },
+    "move_track": {
+      "name": "Titel verschieben",
+      "description": "Verschiebt einen Titel der Linn-Playlist an eine neue Position. Läuft der Titel gerade, beginnt er nach dem Verschieben von vorn.",
+      "fields": {
+        "track_id": {
+          "name": "Titel-ID",
+          "description": "ID des Titels in der Linn-Playlist."
+        },
+        "position": {
+          "name": "Position",
+          "description": "Neue Position (1 = Anfang)."
         }
       }
     }

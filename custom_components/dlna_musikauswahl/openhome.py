@@ -349,6 +349,28 @@ class OpenHomeRenderer:
         return int(result.get("Duration", 0)), int(result.get("Seconds", 0))
 
     # ----------------------------------------------------------- high level ops
+    async def move(self, track_id: int, after_id: int) -> int:
+        """Move a track behind another one (0 = to the top).
+
+        OpenHome has no move action: the track is read, deleted and inserted
+        again, which gives it a new id. If it was playing, playback continues
+        with the moved track (from its beginning).
+        """
+        if track_id == after_id:
+            return track_id
+        entries = await self.read_list([track_id])
+        if not entries:
+            raise OpenHomeError(f"Track {track_id} is not in the playlist")
+        entry = entries[0]
+        was_current = await self.current_id() == track_id
+        state = (await self.transport_state()).lower() if was_current else ""
+        await self.delete_id(track_id)
+        new_id = await self.insert(after_id, PlaylistTrack(entry.uri, entry.metadata))
+        if was_current and state in ("playing", "buffering"):
+            await self.seek_id(new_id)
+            await self.play()
+        return new_id
+
     async def load_tracks(
         self,
         tracks: list[PlaylistTrack],

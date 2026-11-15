@@ -5,12 +5,16 @@
       "user": {
         "title": "Select Linn player",
         "description": "Select the Linn DSM (or another OpenHome player) whose playlist should be filled.",
-        "data": { "renderer": "Player" }
+        "data": {
+          "renderer": "Player"
+        }
       },
       "manual": {
         "title": "Add player manually",
         "description": "URL of the player's UPnP device description, e.g. http://192.168.1.50:55178/Ds/device.xml",
-        "data": { "url": "Device description URL" }
+        "data": {
+          "url": "Device description URL"
+        }
       },
       "confirm": {
         "title": "Linn player found",
@@ -68,6 +72,40 @@
         "play": {
           "name": "Start playback",
           "description": "Start playback after loading (default: for replace and play)."
+        }
+      }
+    },
+    "play_track": {
+      "name": "Play playlist track",
+      "description": "Jumps to the given track of the Linn playlist and plays it.",
+      "fields": {
+        "track_id": {
+          "name": "Track ID",
+          "description": "ID of the track in the Linn playlist (see the playlist card or the current_track_id attribute)."
+        }
+      }
+    },
+    "remove_tracks": {
+      "name": "Remove tracks from playlist",
+      "description": "Removes one or more tracks from the Linn playlist.",
+      "fields": {
+        "track_ids": {
+          "name": "Track IDs",
+          "description": "List of track IDs to remove."
+        }
+      }
+    },
+    "move_track": {
+      "name": "Move track",
+      "description": "Moves a track of the Linn playlist to a new position. If it is playing it restarts after the move.",
+      "fields": {
+        "track_id": {
+          "name": "Track ID",
+          "description": "ID of the track in the Linn playlist."
+        },
+        "position": {
+          "name": "Position",
+          "description": "New position (1 = top)."
         }
       }
     }
