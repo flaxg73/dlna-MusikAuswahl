@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/flaxg73/dlna-MusikAuswahl/main/custom_components/dlna_musikauswahl/brand/dark_logo@2x.png">
+    <img src="https://raw.githubusercontent.com/flaxg73/dlna-MusikAuswahl/main/custom_components/dlna_musikauswahl/brand/logo@2x.png" alt="Linn" width="300">
+  </picture>
+</p>
+
 # DLNA Musikauswahl für Home Assistant (Linn-Playlist)
 
 Eine Custom Integration für Home Assistant. Du durchsuchst damit einen oder mehrere
@@ -89,6 +96,10 @@ Home-Assistant-Medienordner oder der Core-Integration *DLNA Digital Media Server
 direkte HTTP-URLs an. Diese werden als einzelner Titel eingefügt.
 
 ## Hinweise
+
+- Das Linn-Logo dient nur zur Kennzeichnung der unterstützten Geräte. Linn ist eine Marke
+  von Linn Products Ltd.; dieses Projekt ist kein offizielles Linn-Produkt und steht in keiner
+  Verbindung zu Linn.
 
 - Home Assistant muss Linn und Musikserver per Multicast (SSDP) erreichen, sonst klappt
   die automatische Erkennung nicht. Läuft HA in Docker, ist dafür `network_mode: host`
