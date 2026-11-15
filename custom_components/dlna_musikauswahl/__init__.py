@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.auth.permissions.const import POLICY_READ
+from homeassistant.auth.permissions.const import POLICY_CONTROL, POLICY_READ
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -22,14 +22,16 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
-    CARD_URL,
     CARD_VERSION,
+    CARDS,
     CONF_MAX_TRACKS,
     CONF_RENDERER_LOCATION,
     CONF_RENDERER_UDN,
     CONF_SERVERS,
     DEFAULT_MAX_TRACKS,
     DOMAIN,
+    FRONTEND_URL,
+    LOAD_MODES,
 )
 from .dms import MediaServer
 from .openhome import OpenHomeError, OpenHomeRenderer
@@ -41,12 +43,15 @@ PLATFORMS = [Platform.MEDIA_PLAYER]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-CARD_FILE = Path(__file__).parent / "frontend" / "linn-playlist-card.js"
+FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the websocket API and the Lovelace card."""
     websocket_api.async_register_command(hass, ws_playlist)
+    websocket_api.async_register_command(hass, ws_browse)
+    websocket_api.async_register_command(hass, ws_search)
+    websocket_api.async_register_command(hass, ws_load)
     await _async_register_card(hass)
     return True
 
@@ -59,14 +64,103 @@ async def _async_register_card(hass: HomeAssistant) -> None:
 
     try:
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(CARD_URL, str(CARD_FILE), False)]
+            [StaticPathConfig(FRONTEND_URL, str(FRONTEND_DIR), False)]
         )
     except RuntimeError:  # already registered (integration reloaded)
         pass
     if "frontend" in hass.config.components:
         from homeassistant.components.frontend import add_extra_js_url  # noqa: PLC0415
 
-        add_extra_js_url(hass, f"{CARD_URL}?v={CARD_VERSION}")
+        for card in CARDS:
+            add_extra_js_url(hass, f"{FRONTEND_URL}/{card}?v={CARD_VERSION}")
+
+
+def _ws_entity(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+    policy: str = POLICY_READ,
+) -> Any | None:
+    """Return the player entity of a websocket message (or send an error)."""
+    entity_id = msg["entity_id"]
+    if not connection.user.permissions.check_entity(entity_id, policy):
+        raise Unauthorized(entity_id=entity_id)
+    entity = hass.data.get(DOMAIN, {}).get(entity_id)
+    if entity is None:
+        connection.send_error(msg["id"], "not_found", f"{entity_id} is not a Linn player")
+    return entity
+
+
+async def _ws_run(connection: websocket_api.ActiveConnection, msg_id: int, coro) -> None:
+    try:
+        result = await coro
+    except HomeAssistantError as err:
+        connection.send_error(msg_id, "failed", str(err))
+        return
+    connection.send_result(msg_id, result)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "dlna_musikauswahl/browse",
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Optional("media_content_id"): vol.Any(None, str),
+        vol.Optional("start", default=0): vol.All(int, vol.Range(min=0)),
+    }
+)
+@websocket_api.async_response
+async def ws_browse(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Browse the media servers of a Linn player (library card)."""
+    if entity := _ws_entity(hass, connection, msg):
+        await _ws_run(
+            connection,
+            msg["id"],
+            entity.async_library_browse(msg.get("media_content_id"), msg["start"]),
+        )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "dlna_musikauswahl/search",
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("query"): vol.All(str, vol.Length(min=1)),
+        vol.Optional("media_content_id"): vol.Any(None, str),
+    }
+)
+@websocket_api.async_response
+async def ws_search(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Search the media servers of a Linn player (library card)."""
+    if entity := _ws_entity(hass, connection, msg):
+        await _ws_run(
+            connection,
+            msg["id"],
+            entity.async_library_search(msg["query"], msg.get("media_content_id")),
+        )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "dlna_musikauswahl/load",
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("media_content_id"): str,
+        vol.Optional("mode", default="replace"): vol.In(LOAD_MODES),
+    }
+)
+@websocket_api.async_response
+async def ws_load(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Load media into the playlist and report the number of tracks."""
+    if entity := _ws_entity(hass, connection, msg, POLICY_CONTROL):
+
+        async def _load() -> dict[str, int]:
+            return {"count": await entity.async_load(msg["media_content_id"], msg["mode"])}
+
+        await _ws_run(connection, msg["id"], _load())
 
 
 @websocket_api.websocket_command(

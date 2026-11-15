@@ -466,3 +466,58 @@ async def test_card_is_served(hass: HomeAssistant, fake: FakeUpnp, hass_client) 
     resp = await client.get("/dlna_musikauswahl/linn-playlist-card.js")
     assert resp.status == 200
     assert "customElements.define(\"linn-playlist-card\"" in await resp.text()
+    resp = await client.get("/dlna_musikauswahl/linn-library-card.js")
+    assert resp.status == 200
+    assert "customElements.define(\"linn-library-card\"" in await resp.text()
+
+
+async def test_library_websocket(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> None:
+    """Browse, search and load through the websocket API of the library card."""
+    await _setup(hass, fake)
+    client = await hass_ws_client(hass)
+    msg_id = 0
+
+    async def ws(type_, **data):
+        nonlocal msg_id
+        msg_id += 1
+        await client.send_json({"id": msg_id, "type": f"dlna_musikauswahl/{type_}",
+                                "entity_id": ENTITY, **data})
+        return await client.receive_json()
+
+    root = (await ws("browse"))["result"]
+    assert [c["title"] for c in root["children"]] == ["MinimServer"]
+    assert root["children"][0]["kind"] == "server"
+
+    server = (await ws("browse", media_content_id=root["children"][0]["id"]))["result"]
+    assert [c["title"] for c in server["children"]] == ["Alben", "Alle Titel"]
+    assert server["can_play"] is False
+
+    albums = (await ws("browse", media_content_id=server["children"][0]["id"]))["result"]
+    album = albums["children"][0]
+    assert album["kind"] == "album" and album["container"] and album["count"] == 4
+    assert album["image"].startswith(f"/api/media_player_proxy/{ENTITY}/browse_media/cover/")
+
+    page = (await ws("browse", media_content_id=album["id"]))["result"]
+    assert page["title"] == "Album 1" and page["can_play"] and page["kind"] == "album"
+    assert page["image"]
+    tracks = page["children"]
+    assert [t["title"] for t in tracks] == ["Track 1.1", "Track 1.2", "Track 1.3"]
+    assert tracks[0]["duration"] == 245 and tracks[0]["track"] == 1
+    assert tracks[0]["subtitle"] == "The Band" and not tracks[0]["container"]
+
+    big = (await ws("browse", media_content_id=server["children"][1]["id"]))["result"]
+    assert len(big["children"]) == 100 and big["total"] == 600 and big["next_start"] == 100
+    more = (await ws("browse", media_content_id=big["id"], start=500))["result"]
+    assert more["children"][0]["title"] == "Song 500" and more["next_start"] is None
+
+    found = (await ws("search", query="Album 2"))["result"]["children"]
+    assert found[0]["container"] and found[0]["title"] == "Album 2"
+
+    result = await ws("load", media_content_id=album["id"], mode="replace")
+    assert result["success"] and result["result"] == {"count": 3}
+    result = await ws("load", media_content_id=tracks[1]["id"], mode="next")
+    assert result["result"] == {"count": 1}
+    assert _order(fake) == ["album1-t1", "album1-t2", "album1-t2", "album1-t3"]
+
+    result = await ws("browse", media_content_id="dlnamusik://uuid%3Anope/0")
+    assert not result["success"]

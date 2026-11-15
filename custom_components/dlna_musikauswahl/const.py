@@ -46,7 +46,8 @@ SERVICE_PLAY_TRACK: Final = "play_track"
 SERVICE_REMOVE_TRACKS: Final = "remove_tracks"
 SERVICE_MOVE_TRACK: Final = "move_track"
 
-CARD_URL: Final = "/dlna_musikauswahl/linn-playlist-card.js"
-CARD_VERSION: Final = "0.2.0"
+FRONTEND_URL: Final = "/dlna_musikauswahl"
+CARDS: Final = ("linn-playlist-card.js", "linn-library-card.js")
+CARD_VERSION: Final = "0.3.0"
 ATTR_MODE: Final = "mode"
 ATTR_PLAY: Final = "play"

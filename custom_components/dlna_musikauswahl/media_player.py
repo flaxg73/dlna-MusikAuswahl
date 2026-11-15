@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
 import voluptuous as vol
+from async_upnp_client.exceptions import UpnpError
 from didl_lite import didl_lite
 from homeassistant.components import media_source
 from homeassistant.components.media_player import (
@@ -69,6 +70,7 @@ _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=5)
 PARALLEL_UPDATES = 1
 SEARCH_LIMIT = 100
+LIBRARY_PAGE_SIZE = 100
 
 _ENQUEUE_TO_MODE = {
     MediaPlayerEnqueue.REPLACE: MODE_REPLACE,
@@ -567,6 +569,16 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         media_type: str | None = None,
     ) -> None:
         """Service: load a track, album, folder or playlist into the Linn playlist."""
+        await self.async_load(media_content_id, mode, play, media_type)
+
+    async def async_load(
+        self,
+        media_content_id: str,
+        mode: str = MODE_REPLACE,
+        play: bool | None = None,
+        media_type: str | None = None,
+    ) -> int:
+        """Load media into the playlist and return the number of tracks."""
         tracks = await self._async_tracks_for(media_content_id, media_type)
         if not tracks:
             raise ServiceValidationError(
@@ -580,6 +592,7 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             raise HomeAssistantError(f"Loading the playlist failed: {err}") from err
         _LOGGER.debug("Loaded %s tracks (%s) into %s", count, mode, self._entry.title)
         self.async_schedule_update_ha_state(True)
+        return count
 
     async def _async_tracks_for(
         self, media_id: str, media_type: str | None = None
@@ -830,17 +843,144 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             servers = [(server, "0") for server in self._servers.values()]
 
         results: list[BrowseMedia] = []
+        for server, obj in await self._async_search_objects(
+            servers, query.search_query
+        ):
+            item = self._browse_item(server, obj)
+            if query.media_filter_classes and item.media_class not in query.media_filter_classes:
+                continue
+            results.append(item)
+        return SearchMedia(result=results)
+
+    async def _async_search_objects(
+        self, servers: list[tuple[MediaServer, str]], text: str
+    ) -> list[tuple[MediaServer, didl_lite.DidlObject]]:
+        found: list[tuple[MediaServer, didl_lite.DidlObject]] = []
         for server, container_id in servers:
             try:
-                found = await server.async_search(container_id, query.search_query, SEARCH_LIMIT)
+                objects = await server.async_search(container_id, text, SEARCH_LIMIT)
             except CONNECT_ERRORS as err:
                 _LOGGER.warning("Search on %s failed: %s", server.name, err)
                 continue
-            for obj in found:
-                if not (is_container(obj) or is_playable_audio_item(obj)):
-                    continue
-                item = self._browse_item(server, obj)
-                if query.media_filter_classes and item.media_class not in query.media_filter_classes:
-                    continue
-                results.append(item)
-        return SearchMedia(result=results)
+            found += [
+                (server, obj)
+                for obj in objects
+                if is_container(obj) or is_playable_audio_item(obj)
+            ]
+        return found
+
+    # --------------------------------------------------------- library card
+    def _library_item(
+        self, server: MediaServer, obj: didl_lite.DidlObject, parent_id: str | None = None
+    ) -> dict[str, Any]:
+        container = is_container(obj)
+        duration = None
+        if not container:
+            for res in getattr(obj, "res", None) or []:
+                if duration := parse_duration(res.duration):
+                    break
+        track = getattr(obj, "original_track_number", None)
+        return {
+            "id": make_content_id(
+                server.udn,
+                obj.id,
+                parent_id=None if container else (parent_id or obj.parent_id or None),
+            ),
+            "title": str(getattr(obj, "title", None) or obj.id),
+            "subtitle": getattr(obj, "artist", None) or getattr(obj, "creator", None),
+            "album": getattr(obj, "album", None),
+            "kind": str(media_class_for(obj)),
+            "container": container,
+            "image": self._art_url(server.absolute_url(album_art_uri(obj))),
+            "duration": duration,
+            "track": int(track) if str(track or "").isdigit() else None,
+            "count": int(getattr(obj, "child_count", None) or 0) or None,
+        }
+
+    async def async_library_browse(
+        self, media_content_id: str | None, start: int = 0
+    ) -> dict[str, Any]:
+        """Browse payload for the library card."""
+        if not media_content_id:
+            return {
+                "id": None,
+                "title": None,
+                "subtitle": None,
+                "kind": "directory",
+                "image": None,
+                "can_play": False,
+                "children": [
+                    {
+                        "id": make_content_id(server.udn, "0"),
+                        "title": server.name,
+                        "subtitle": None,
+                        "kind": "server",
+                        "container": True,
+                        "image": None,
+                    }
+                    for server in self._servers.values()
+                ],
+                "total": len(self._servers),
+                "next_start": None,
+            }
+        try:
+            udn, object_id, _start = parse_content_id(media_content_id)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        server = self._server(udn)
+        title, subtitle, image, kind = server.name, None, None, "directory"
+        try:
+            if object_id != "0":
+                try:
+                    meta = await server.async_metadata(object_id)
+                except (AssertionError, IndexError, UpnpError) as err:
+                    _LOGGER.debug("BrowseMetadata of %s failed: %s", object_id, err)
+                    meta = None
+                if meta is not None:
+                    title = str(getattr(meta, "title", None) or object_id)
+                    subtitle = getattr(meta, "artist", None) or getattr(meta, "creator", None)
+                    image = self._art_url(server.absolute_url(album_art_uri(meta)))
+                    if is_container(meta):
+                        kind = str(media_class_for(meta))
+                else:
+                    title = object_id
+            page = await server.async_browse(object_id, start, LIBRARY_PAGE_SIZE)
+        except CONNECT_ERRORS as err:
+            raise HomeAssistantError(f"Media server {server.name} not reachable: {err}") from err
+        children = [
+            self._library_item(server, child, object_id)
+            for child in page.children
+            if is_container(child) or is_playable_audio_item(child)
+        ]
+        next_start = start + len(page.children)
+        return {
+            "id": make_content_id(server.udn, object_id),
+            "title": title,
+            "subtitle": subtitle,
+            "kind": kind,
+            "image": image,
+            "server": server.name,
+            "can_play": object_id != "0",
+            "children": children,
+            "total": page.total,
+            "next_start": next_start if page.children and next_start < page.total else None,
+        }
+
+    async def async_library_search(
+        self, text: str, media_content_id: str | None = None
+    ) -> dict[str, Any]:
+        """Search payload for the library card."""
+        servers: list[tuple[MediaServer, str]]
+        if media_content_id:
+            try:
+                udn, object_id, _start = parse_content_id(media_content_id)
+            except ValueError as err:
+                raise ServiceValidationError(str(err)) from err
+            servers = [(self._server(udn), object_id)]
+        else:
+            servers = [(server, "0") for server in self._servers.values()]
+        found = await self._async_search_objects(servers, text)
+        items = [self._library_item(server, obj) for server, obj in found]
+        # albums/artists/folders first, then tracks
+        items.sort(key=lambda item: not item["container"])
+        return {"query": text, "children": items}
