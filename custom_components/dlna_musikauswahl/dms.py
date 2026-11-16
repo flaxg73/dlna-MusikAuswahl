@@ -30,6 +30,7 @@ _LOGGER = logging.getLogger(__name__)
 # Asset, MinimServer and Linn/Kazoo Server all handle it well.
 METADATA_FILTER = "*"
 COLLECT_PAGE_SIZE = 200
+FILTER_SCAN_LIMIT = 5000
 
 
 @dataclass(slots=True)
@@ -51,6 +52,7 @@ class MediaServer:
         self.name: str = config.get(SERVER_NAME) or self.udn
         self.location: str = config.get(SERVER_LOCATION, "")
         self._device: DmsDevice | None = None
+        self._search_caps_loaded = False
         self._lock = asyncio.Lock()
 
     @property
@@ -116,28 +118,95 @@ class MediaServer:
     async def async_search(
         self, container_id: str, query: str, limit: int
     ) -> list[didl_lite.DidlObject]:
-        """Search the server (title, artist and album)."""
+        """Search the server for title, artist and album.
+
+        DLNA servers differ a lot here, so several variants are tried:
+        the requested container first, then the root ("0") - many servers only
+        search from the root - and several spellings of the search criteria.
+        If the server cannot search at all, the children of the container are
+        filtered instead.
+        """
         escaped = query.replace("\\", "\\\\").replace('"', '\\"')
 
         async def _search(dev: DmsDevice) -> list[didl_lite.DidlObject]:
             if not dev.has_search_directory:
                 return []
-            caps = {c.lower() for c in dev.search_capabilities}
+            if not self._search_caps_loaded:
+                try:
+                    await dev.async_update()
+                except CONNECT_ERRORS as err:
+                    _LOGGER.debug("GetSearchCapabilities on %s failed: %s", self.name, err)
+                self._search_caps_loaded = True
+            caps = {c.strip().lower() for c in dev.search_capabilities}
             fields = [
                 f
                 for f in ("dc:title", "upnp:artist", "upnp:album", "dc:creator")
                 if not caps or "*" in caps or f.lower() in caps
             ] or ["dc:title"]
-            criteria = " or ".join(f'{f} contains "{escaped}"' for f in fields)
-            result = await dev.async_search_directory(
-                container_id,
-                f"({criteria})",
-                metadata_filter=METADATA_FILTER,
-                requested_count=limit,
+            any_field = " or ".join(f'{f} contains "{escaped}"' for f in fields)
+            title = f'dc:title contains "{escaped}"'
+            variants = list(
+                dict.fromkeys(
+                    [
+                        any_field,
+                        f"({any_field})",
+                        title,
+                        f'upnp:class derivedfrom "object.item.audioItem" and {title}',
+                    ]
+                )
             )
-            return [o for o in result.result if isinstance(o, didl_lite.DidlObject)]
+            containers = list(dict.fromkeys([container_id, "0"]))
+            for cid in containers:
+                for criteria in variants:
+                    try:
+                        result = await dev.async_search_directory(
+                            cid,
+                            criteria,
+                            metadata_filter=METADATA_FILTER,
+                            requested_count=limit,
+                        )
+                    except (UpnpActionError, UpnpActionResponseError) as err:
+                        _LOGGER.debug(
+                            "Search %r in %r on %s rejected: %s", criteria, cid, self.name, err
+                        )
+                        continue
+                    found = [o for o in result.result if isinstance(o, didl_lite.DidlObject)]
+                    _LOGGER.debug(
+                        "Search %r in %r on %s: %s results", criteria, cid, self.name, len(found)
+                    )
+                    if found:
+                        return found
+            return []
 
-        return await self._async_retry(_search)
+        found = await self._async_retry(_search)
+        if found:
+            return found
+        return await self._async_filter_children(container_id, query, limit)
+
+    async def _async_filter_children(
+        self, container_id: str, query: str, limit: int
+    ) -> list[didl_lite.DidlObject]:
+        """Fallback search: match the entries of a container by name."""
+        needle = query.casefold()
+        found: list[didl_lite.DidlObject] = []
+        start = 0
+        while start < FILTER_SCAN_LIMIT and len(found) < limit:
+            page = await self.async_browse(container_id, start, COLLECT_PAGE_SIZE)
+            for child in page.children:
+                text = " ".join(
+                    str(getattr(child, attr, None) or "")
+                    for attr in ("title", "artist", "album", "creator")
+                ).casefold()
+                if needle in text:
+                    found.append(child)
+            start += len(page.children)
+            if not page.children or start >= page.total:
+                break
+        _LOGGER.debug(
+            "Filtered %s entries of %r on %s for %r: %s matches",
+            start, container_id, self.name, query, len(found),
+        )
+        return found[:limit]
 
     async def async_collect_tracks(
         self,

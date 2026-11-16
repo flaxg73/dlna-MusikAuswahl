@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.3.0";
+const CARD_VERSION = "0.5.0";
 
 const STRINGS = {
   de: {
@@ -44,6 +44,15 @@ const STRINGS = {
     notFound: "Entität gehört nicht zur Integration DLNA Musikauswahl",
     noEntity: "Bitte eine Linn-Player-Entität auswählen",
     error: "Fehler",
+    close: "Schließen",
+    tabs: { server: "Musik-Server", qobuz: "Qobuz", radio: "Radio" },
+    searchRadio: "Sender suchen …",
+    radioPlaying: (name) => `📻 ${name} wird gespielt`,
+    qobuzMissing:
+      "Kein Qobuz-Server eingerichtet. Qobuz erscheint hier über einen DLNA-Brückenserver wie upmpdcli (Qobuz-Plugin) oder BubbleUPnP Server. Richte ihn ein, füge ihn in der Integration als Musikserver hinzu und wähle ihn in den Optionen unter „Qobuz-Server“.",
+    buttonName: "Musik auswählen",
+    off: "Standby",
+    idle: "Bereit",
   },
   en: {
     library: "Music",
@@ -74,10 +83,23 @@ const STRINGS = {
     notFound: "Entity does not belong to the DLNA Musikauswahl integration",
     noEntity: "Please select a Linn player entity",
     error: "Error",
+    close: "Close",
+    tabs: { server: "Music server", qobuz: "Qobuz", radio: "Radio" },
+    searchRadio: "Search stations …",
+    radioPlaying: (name) => `📻 Playing ${name}`,
+    qobuzMissing:
+      "No Qobuz server set up. Qobuz is shown here through a DLNA bridge such as upmpdcli (Qobuz plugin) or BubbleUPnP Server. Set it up, add it to the integration as a music server and choose it in the options as “Qobuz server”.",
+    buttonName: "Choose music",
+    off: "Standby",
+    idle: "Ready",
   },
 };
 
+const TAB_ICON = { server: "mdi:server-network", qobuz: "mdi:music-circle", radio: "mdi:radio" };
+const RADIO_SCHEME = "dlnamusik-radio://";
+
 const KIND_ICON = {
+  radio: "mdi:radio",
   server: "mdi:server-network",
   album: "mdi:album",
   artist: "mdi:account-music",
@@ -106,6 +128,8 @@ class LinnLibraryCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._stack = [{ id: null, title: null }];
     this._cache = new Map();
+    this._tab = "server";
+    this._tabState = {};
     this._page = null;
     this._items = [];
     this._nextStart = null;
@@ -149,6 +173,35 @@ class LinnLibraryCard extends HTMLElement {
           selector: { select: { mode: "dropdown", options: ["auto", "grid", "list"] } },
         },
         { name: "max_height", selector: { text: {} } },
+        {
+          name: "display",
+          selector: {
+            select: {
+              mode: "dropdown",
+              options: [
+                { value: "inline", label: "Karte im Dashboard / Inline card" },
+                { value: "button", label: "Button → Vollbild / Button → fullscreen" },
+              ],
+            },
+          },
+        },
+        {
+          name: "sources",
+          selector: {
+            select: {
+              multiple: true,
+              mode: "list",
+              options: [
+                { value: "server", label: "Musik-Server" },
+                { value: "qobuz", label: "Qobuz" },
+                { value: "radio", label: "Radio (TuneIn)" },
+              ],
+            },
+          },
+        },
+        { name: "button_name", selector: { text: {} } },
+        { name: "button_icon", selector: { icon: {} } },
+        { name: "playlist_panel", selector: { boolean: {} } },
       ],
     };
   }
@@ -159,11 +212,29 @@ class LinnLibraryCard extends HTMLElement {
     return { entity: entity || "" };
   }
 
+  get _isButton() {
+    return this._config?.display === "button";
+  }
+
   setConfig(config) {
     const entityChanged = this._config?.entity !== config.entity;
-    this._config = { track_action: "play", view: "auto", max_height: "520px", ...config };
+    this._config = {
+      track_action: "play",
+      view: "auto",
+      max_height: "520px",
+      display: "inline",
+      playlist_panel: true,
+      ...config,
+    };
+    if (this._isButton) {
+      this._overlayChild?.setConfig(this._overlayConfig());
+      this._renderButton();
+      return;
+    }
     if (entityChanged) {
       this._cache.clear();
+      this._tabState = {};
+      this._tab = this._restoreTab();
       this._stack = this._restoreStack();
       this._page = null;
       if (this._hass) this._open(this._current.id, false);
@@ -172,16 +243,24 @@ class LinnLibraryCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 9;
+    return this._isButton ? 1 : 9;
   }
 
   getGridOptions() {
-    return { columns: 12, min_columns: 6, rows: 9, min_rows: 5 };
+    return this._isButton
+      ? { columns: 6, min_columns: 3, rows: 1, min_rows: 1 }
+      : { columns: 12, min_columns: 6, rows: 9, min_rows: 5 };
   }
 
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    if (this._isButton) {
+      if (this._overlayChild) this._overlayChild.hass = hass;
+      if (this._overlayPlaylist) this._overlayPlaylist.hass = hass;
+      this._renderButton();
+      return;
+    }
     if (first && this._config) this._open(this._current.id, false);
   }
 
@@ -191,6 +270,87 @@ class LinnLibraryCard extends HTMLElement {
 
   disconnectedCallback() {
     document.removeEventListener("click", this._onOutside, true);
+    this._closeOverlay(false);
+  }
+
+  // ------------------------------------------------- button + fullscreen
+  _renderButton() {
+    const t = this._t;
+    const stateObj = this._hass?.states?.[this._config.entity];
+    let sub = "";
+    if (stateObj) {
+      const a = stateObj.attributes;
+      if (stateObj.state === "off") sub = t.off;
+      else if (a.media_title) sub = [a.media_title, a.media_artist].filter(Boolean).join(" · ");
+      else sub = t.idle;
+    }
+    const name = this._config.button_name || t.buttonName;
+    const icon = this._config.button_icon || "mdi:music-box-multiple";
+    const key = [name, icon, sub].join("|");
+    if (key === this._buttonKey && this.shadowRoot.querySelector(".launcher")) return;
+    this._buttonKey = key;
+    this.shadowRoot.innerHTML = `<style>${BUTTON_STYLE}</style>
+      <ha-card><div class="launcher" role="button" tabindex="0">
+        <div class="l-icon"><ha-icon icon="${esc(icon)}"></ha-icon></div>
+        <div class="l-text"><div class="l-name">${esc(name)}</div>${sub ? `<div class="l-sub">${esc(sub)}</div>` : ""}</div>
+        <ha-icon class="l-go" icon="mdi:arrow-expand"></ha-icon>
+      </div></ha-card>`;
+    const card = this.shadowRoot.querySelector(".launcher");
+    card.addEventListener("click", () => this._openOverlay());
+    card.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        this._openOverlay();
+      }
+    });
+  }
+
+  _overlayConfig() {
+    const { display, button_name, button_icon, playlist_panel, ...rest } = this._config;
+    return { ...rest, display: "inline", max_height: "none", _overlay: true };
+  }
+
+  _openOverlay() {
+    if (this._overlayHost || !this._config?.entity) return;
+    const host = document.createElement("div");
+    host.className = "linn-library-overlay";
+    const root = host.attachShadow({ mode: "open" });
+    const panel = this._config.playlist_panel !== false && customElements.get("linn-playlist-card");
+    root.innerHTML = `<style>${OVERLAY_STYLE}</style>
+      <div class="ov ${panel ? "with-panel" : ""}"><div class="main"></div>${panel ? `<div class="side"></div>` : ""}</div>`;
+
+    const lib = document.createElement("linn-library-card");
+    lib.setConfig(this._overlayConfig());
+    lib.hass = this._hass;
+    lib.addEventListener("linn-library-close", () => this._closeOverlay());
+    root.querySelector(".main").append(lib);
+    this._overlayChild = lib;
+
+    if (panel) {
+      const playlist = document.createElement("linn-playlist-card");
+      playlist.setConfig({ entity: this._config.entity, show_header: true, max_height: "none", _embedded: true });
+      playlist.hass = this._hass;
+      root.querySelector(".side").append(playlist);
+      this._overlayPlaylist = playlist;
+    }
+
+    this._bodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.body.append(host);
+    this._overlayHost = host;
+  }
+
+  _closeOverlay(animate = true) {
+    const host = this._overlayHost;
+    if (!host) return;
+    this._overlayHost = null;
+    this._overlayChild = null;
+    this._overlayPlaylist = null;
+    document.body.style.overflow = this._bodyOverflow || "";
+    const remove = () => host.remove();
+    if (!animate) return remove();
+    host.shadowRoot.querySelector(".ov")?.classList.add("closing");
+    setTimeout(remove, 180);
   }
 
   get _t() {
@@ -203,8 +363,62 @@ class LinnLibraryCard extends HTMLElement {
   }
 
   // -------------------------------------------------------- persistence
+  get _sources() {
+    const sources = (this._config?.sources || ["server", "qobuz", "radio"]).filter((s) => TAB_ICON[s]);
+    return sources.length ? sources : ["server"];
+  }
+
   get _storageKey() {
-    return `linn-library-card:${this._config?.entity}`;
+    const tab = this._tab === "server" ? "" : `:${this._tab}`;
+    return `linn-library-card:${this._config?.entity}${tab}`;
+  }
+
+  _restoreTab() {
+    try {
+      const tab = localStorage.getItem(`linn-library-card:${this._config?.entity}:tab`);
+      if (tab && this._sources.includes(tab)) return tab;
+    } catch (err) {
+      /* storage not available */
+    }
+    return this._sources[0];
+  }
+
+  _switchTab(tab) {
+    if (tab === this._tab || !this._sources.includes(tab)) return;
+    this._tabState[this._tab] = {
+      stack: this._stack,
+      cache: this._cache,
+      page: this._page,
+      items: this._items,
+      nextStart: this._nextStart,
+      scroll: this.shadowRoot.querySelector(".scroll")?.scrollTop || 0,
+    };
+    this._tab = tab;
+    try {
+      localStorage.setItem(`linn-library-card:${this._config?.entity}:tab`, tab);
+    } catch (err) {
+      /* storage not available */
+    }
+    this._searchOpen = false;
+    this._results = null;
+    this._menu = null;
+    this._error = null;
+    const state = this._tabState[tab];
+    if (state && state.page) {
+      Object.assign(this, {
+        _stack: state.stack,
+        _cache: state.cache,
+        _page: state.page,
+        _items: state.items,
+        _nextStart: state.nextStart,
+      });
+      this._render(state.scroll);
+      return;
+    }
+    this._stack = this._restoreStack();
+    this._cache = new Map();
+    this._page = null;
+    this._open(this._current.id, false);
   }
 
   _restoreStack() {
@@ -255,9 +469,9 @@ class LinnLibraryCard extends HTMLElement {
     this._page = null;
     this._render();
     try {
-      const page = await this._ws("browse", { media_content_id: id });
+      const page = await this._ws("browse", { media_content_id: id, source: this._tab });
       // a single server: jump straight into it
-      if (id === null && page.children.length === 1 && this._stack.length === 1) {
+      if (this._tab === "server" && id === null && page.children.length === 1 && this._stack.length === 1) {
         this._cache.set("", { page, items: page.children, nextStart: null });
         this._loading = false;
         this._stack = [{ id: null, title: null, skip: true }];
@@ -290,7 +504,7 @@ class LinnLibraryCard extends HTMLElement {
     this._loading = true;
     this._render();
     try {
-      const page = await this._ws("browse", { media_content_id: this._page.id, start: this._nextStart });
+      const page = await this._ws("browse", { media_content_id: this._page.id, start: this._nextStart, source: this._tab });
       this._items = this._items.concat(page.children);
       this._nextStart = page.next_start;
       this._cache.set(this._current.id ?? "", { page: this._page, items: this._items, nextStart: this._nextStart });
@@ -326,8 +540,9 @@ class LinnLibraryCard extends HTMLElement {
     this._results = null;
     this._render();
     try {
-      const scope = this._page?.can_play || this._page?.kind === "directory" ? this._page?.id : null;
-      const result = await this._ws("search", { query, media_content_id: scope || undefined });
+      const scope =
+        this._tab !== "radio" && (this._page?.can_play || this._page?.kind === "directory") ? this._page?.id : null;
+      const result = await this._ws("search", { query, media_content_id: scope || undefined, source: this._tab });
       this._results = result.children;
       this._error = null;
     } catch (err) {
@@ -343,7 +558,8 @@ class LinnLibraryCard extends HTMLElement {
     this._render();
     try {
       const result = await this._ws("load", { media_content_id: id, mode });
-      this._showToast(this._t.added[mode](result.count));
+      if (id.startsWith(RADIO_SCHEME)) this._showToast(this._t.radioPlaying(this._findItem(id)?.title || ""));
+      else this._showToast(this._t.added[mode](result.count));
     } catch (err) {
       this._showToast(`${this._t.error}: ${err?.message || err}`, true);
     }
@@ -378,11 +594,11 @@ class LinnLibraryCard extends HTMLElement {
 
     let body;
     if (!this._config.entity) body = `<div class="message">${esc(t.noEntity)}</div>`;
-    else body = this._renderNav() + `<div class="scroll">${this._renderContent()}</div>`;
+    else body = this._renderNav() + this._renderTabs() + `<div class="scroll">${this._renderContent()}</div>`;
 
-    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${body}${this._renderMenu()}${
+    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="${this._config._overlay ? "full" : ""}"><div class="body">${body}${this._renderMenu()}${
       this._toast ? `<div class="toast ${this._toast.error ? "error" : ""}">${esc(this._toast.text)}</div>` : ""
-    }</ha-card>`;
+    }</div></ha-card>`;
 
     const scroll = this.shadowRoot.querySelector(".scroll");
     if (scroll) {
@@ -401,11 +617,14 @@ class LinnLibraryCard extends HTMLElement {
   _renderNav() {
     const t = this._t;
     const canBack = this._canBack;
+    const close = this._config._overlay
+      ? `<button class="icon" data-action="close" title="${esc(t.close)}"><ha-icon icon="mdi:close"></ha-icon></button>`
+      : "";
     if (this._searchOpen) {
       return `
         <div class="nav">
           <button class="icon" data-action="search-close" title="${esc(t.back)}"><ha-icon icon="mdi:arrow-left"></ha-icon></button>
-          <input class="search-input" type="search" enterkeyhint="search" placeholder="${esc(t.searchPlaceholder)}" value="${esc(this._searchQuery)}">
+          <input class="search-input" type="search" enterkeyhint="search" placeholder="${esc(this._tab === "radio" ? t.searchRadio : t.searchPlaceholder)}" value="${esc(this._searchQuery)}">
           <button class="icon" data-action="search-go" title="${esc(t.search)}"><ha-icon icon="mdi:magnify"></ha-icon></button>
         </div>`;
     }
@@ -419,6 +638,7 @@ class LinnLibraryCard extends HTMLElement {
       .join(" › ");
     return `
       <div class="nav">
+        ${close}
         ${canBack ? `<button class="icon" data-action="back" title="${esc(t.back)}"><ha-icon icon="mdi:arrow-left"></ha-icon></button>` : `<span class="nav-pad"></span>`}
         <div class="nav-title">
           ${path ? `<div class="path">${esc(path)}</div>` : ""}
@@ -430,9 +650,54 @@ class LinnLibraryCard extends HTMLElement {
       </div>`;
   }
 
+  _renderTabs() {
+    const sources = this._sources;
+    if (sources.length < 2 || this._searchOpen) return "";
+    const t = this._t;
+    return `<div class="tabs">${sources
+      .map(
+        (src) =>
+          `<button class="tab ${src === this._tab ? "active" : ""}" data-action="tab" data-tab="${src}"><ha-icon icon="${TAB_ICON[src]}"></ha-icon><span>${esc(t.tabs[src])}</span></button>`
+      )
+      .join("")}</div>`;
+  }
+
+  _renderRadio(items) {
+    let section = null;
+    const rows = items.map((item) => {
+      let head = "";
+      if (item.section && item.section !== section) {
+        section = item.section;
+        head = `<div class="section">${esc(section)}</div>`;
+      }
+      const logo = item.image
+        ? `<div class="logo" style="background-image:url('${esc(item.image)}')"></div>`
+        : `<div class="logo placeholder"><ha-icon icon="${KIND_ICON[item.kind] || "mdi:folder"}"></ha-icon></div>`;
+      if (item.container) {
+        return `${head}<div class="row" data-open="${esc(item.id)}" data-title="${esc(item.title)}">${logo}
+          <div class="text"><div class="t">${esc(item.title)}</div>${item.subtitle ? `<div class="s">${esc(item.subtitle)}</div>` : ""}</div>
+          <ha-icon class="chevron" icon="mdi:chevron-right"></ha-icon></div>`;
+      }
+      const sub = [item.subtitle, item.details].filter(Boolean).join(" · ");
+      return `${head}<div class="row station" data-station="${esc(item.id)}">${logo}
+        <div class="text"><div class="t">${esc(item.title)}</div>${sub ? `<div class="s">${esc(sub)}</div>` : ""}</div>
+        <button class="icon small play" data-action="load" data-mode="play" data-id="${esc(item.id)}" title="${esc(this._t.play)}"><ha-icon icon="mdi:play-circle"></ha-icon></button></div>`;
+    });
+    return `<div class="list">${rows.join("")}</div>`;
+  }
+
   _renderContent() {
     const t = this._t;
     if (this._error) return `<div class="message warning">${esc(this._error)}</div>`;
+    if (this._tab === "radio" && this._searchOpen && this._results) {
+      return this._results.length ? this._renderRadio(this._results) : `<div class="message">${esc(t.noResults)}</div>`;
+    }
+    if (!this._searchOpen && this._page?.message === "qobuz_not_configured") {
+      return `<div class="message info"><ha-icon icon="mdi:music-circle"></ha-icon><div>${esc(t.qobuzMissing)}</div></div>`;
+    }
+    if (!this._searchOpen && this._tab === "radio" && this._page) {
+      return this._items.length ? this._renderRadio(this._items) : `<div class="message">${esc(t.empty)}</div>`;
+    }
     if (this._searchOpen) {
       if (this._results === null) {
         return this._loading ? `<div class="message"><ha-icon class="spin" icon="mdi:loading"></ha-icon></div>` : "";
@@ -595,6 +860,9 @@ class LinnLibraryCard extends HTMLElement {
     root.querySelectorAll("[data-open]").forEach((el) =>
       el.addEventListener("click", () => this._open(el.dataset.open, true, el.dataset.title))
     );
+    root.querySelectorAll("[data-station]").forEach((el) =>
+      el.addEventListener("click", () => this._load(el.dataset.station, "play"))
+    );
     root.querySelectorAll("[data-track]").forEach((el) =>
       el.addEventListener("click", () => this._load(el.dataset.track, this._config.track_action))
     );
@@ -637,6 +905,11 @@ class LinnLibraryCard extends HTMLElement {
 
   _onAction(action, data, btn) {
     switch (action) {
+      case "tab":
+        return this._switchTab(data.tab);
+      case "close":
+        this.dispatchEvent(new CustomEvent("linn-library-close", { bubbles: true, composed: true }));
+        return;
       case "back":
         return this._back();
       case "home":
@@ -669,7 +942,19 @@ class LinnLibraryCard extends HTMLElement {
 
 const STYLE = `
   :host { display: block; }
-  ha-card { overflow: hidden; display: flex; flex-direction: column; height: 100%; position: relative; }
+  ha-card { overflow: hidden; height: 100%; position: relative; }
+  .body { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  ha-card.full { border-radius: 0; box-shadow: none; border: none; }
+  .full .nav { min-height: 60px; padding: 8px 12px; padding-top: calc(8px + env(safe-area-inset-top, 0px)); }
+  .full .nav-title .name { font-size: 1.2em; }
+  .full .grid { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 20px 16px; padding: 16px 20px 24px; }
+  .full .hero { padding: 20px; }
+  .full .hero-art { width: 160px; height: 160px; }
+  .full .hero-title { font-size: 1.5em; }
+  @media (max-width: 600px) {
+    .full .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); padding: 12px; gap: 14px 12px; }
+    .full .hero-art { width: 112px; height: 112px; }
+  }
   button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
   button:disabled { opacity: 0.35; cursor: default; }
   .icon { width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
@@ -691,6 +976,21 @@ const STYLE = `
                   font: inherit; color: var(--primary-text-color); background: var(--secondary-background-color, transparent); outline: none; }
   .search-input:focus { border-color: var(--primary-color); }
   .scroll { overflow-y: auto; flex: 1; overscroll-behavior: contain; }
+  .tabs { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--divider-color); overflow-x: auto; }
+  .tab { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px 0 10px; border-radius: 17px;
+         border: 1px solid var(--divider-color); color: var(--primary-text-color); font-weight: 500; white-space: nowrap;
+         --mdc-icon-size: 18px; transition: background 0.15s, color 0.15s; }
+  .tab ha-icon { color: var(--secondary-text-color); }
+  .tab:hover { background: rgba(127,127,127,0.1); }
+  .tab.active { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
+  .tab.active ha-icon { color: inherit; }
+  .section { padding: 14px 16px 4px; font-size: 0.8em; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase;
+             color: var(--secondary-text-color); }
+  .logo { width: 44px; height: 44px; border-radius: 8px; background: #fff center / contain no-repeat; flex: none;
+          box-shadow: 0 0 0 1px var(--divider-color) inset; --mdc-icon-size: 22px; }
+  .logo.placeholder { box-shadow: none; }
+  .station .play { color: var(--primary-color); --mdc-icon-size: 28px; width: 40px; height: 40px; }
+  .message.info { display: flex; flex-direction: column; align-items: center; gap: 10px; line-height: 1.45; max-width: 520px; margin: 0 auto; }
   .hero { display: flex; gap: 16px; padding: 16px; align-items: center; }
   .hero-art { width: 112px; height: 112px; border-radius: 8px; background: center / cover no-repeat; flex: none;
               box-shadow: 0 2px 6px rgba(0,0,0,0.3); --mdc-icon-size: 48px; }
@@ -745,6 +1045,32 @@ const STYLE = `
   .spin { animation: spin 1s linear infinite; color: var(--secondary-text-color); }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+`;
+
+const BUTTON_STYLE = `
+  :host { display: block; height: 100%; }
+  ha-card { height: 100%; overflow: hidden; }
+  .launcher { display: flex; align-items: center; gap: 12px; padding: 0 12px; height: 100%; min-height: 56px;
+              box-sizing: border-box; cursor: pointer; transition: background 0.15s; outline: none; }
+  .launcher:hover, .launcher:focus-visible { background: rgba(127,127,127,0.08); }
+  .l-icon { width: 36px; height: 36px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+            background: rgba(var(--rgb-primary-color, 3,169,244), 0.2); color: var(--primary-color); --mdc-icon-size: 22px; }
+  .l-text { flex: 1; min-width: 0; }
+  .l-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l-sub { font-size: 0.85em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l-go { color: var(--secondary-text-color); --mdc-icon-size: 20px; flex: none; }
+`;
+
+const OVERLAY_STYLE = `
+  .ov { position: fixed; inset: 0; z-index: 1000; display: flex; background: var(--primary-background-color, #fafafa);
+        animation: ov-in 0.2s ease-out; padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  .ov.closing { animation: ov-out 0.18s ease-in forwards; }
+  .main { flex: 1; min-width: 0; display: flex; }
+  .main > *, .side > * { flex: 1; min-width: 0; height: 100%; }
+  .side { width: 420px; flex: none; display: flex; border-left: 1px solid var(--divider-color); }
+  @media (max-width: 999px) { .side { display: none; } }
+  @keyframes ov-in { from { opacity: 0; transform: translateY(24px); } }
+  @keyframes ov-out { to { opacity: 0; transform: translateY(24px); } }
 `;
 
 if (!customElements.get("linn-library-card")) {

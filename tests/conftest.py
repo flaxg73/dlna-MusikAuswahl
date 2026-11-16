@@ -9,7 +9,7 @@ import pytest
 from aiohttp.test_utils import TestServer
 from homeassistant.core import HomeAssistant
 
-from .fake_upnp import FakeUpnp, Library
+from .fake_upnp import FakeUpnp, Library, qobuz_library
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +26,7 @@ async def fake(hass: HomeAssistant, socket_enabled) -> AsyncGenerator[FakeUpnp]:
     await server.start_server()
     fake.base = str(server.make_url("")).rstrip("/")
     fake.library = Library(fake.base)
+    fake.qobuz = qobuz_library(fake.base)
     # pretend the SSDP integration is running, without touching the network
     hass.config.components.add("ssdp")
     with (
@@ -37,6 +38,7 @@ async def fake(hass: HomeAssistant, socket_enabled) -> AsyncGenerator[FakeUpnp]:
             "homeassistant.components.ssdp.async_get_discovery_info_by_st",
             return_value=[],
         ),
+        patch("custom_components.dlna_musikauswahl.tunein.BASE_URL", f"{fake.base}/opml"),
     ):
         yield fake
     await server.close()

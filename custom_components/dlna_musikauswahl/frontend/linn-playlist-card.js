@@ -10,7 +10,7 @@
  */
 
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.4.0";
 
 const STRINGS = {
   de: {
@@ -246,7 +246,7 @@ class LinnPlaylistCard extends HTMLElement {
     if (this._error) body += `<div class="message warning">${esc(this._error)}</div>`;
 
     const scroll = this.shadowRoot.querySelector(".list")?.scrollTop;
-    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${body}</ha-card>`;
+    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="${this._config._embedded ? "full" : ""}"><div class="body">${body}</div></ha-card>`;
     const list = this.shadowRoot.querySelector(".list");
     if (list) {
       list.style.maxHeight = this._config.max_height;
@@ -508,7 +508,10 @@ class LinnPlaylistCard extends HTMLElement {
 
 const STYLE = `
   :host { display: block; }
-  ha-card { overflow: hidden; display: flex; flex-direction: column; height: 100%; }
+  ha-card { overflow: hidden; height: 100%; }
+  .body { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  ha-card.full { border-radius: 0; box-shadow: none; border: none; }
+  .full .header { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
   button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
   button:disabled { opacity: 0.35; cursor: default; }
   .icon { width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
