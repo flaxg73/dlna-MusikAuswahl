@@ -33,6 +33,7 @@ from .const import (
     CONF_RENDERER_NAME,
     CONF_RENDERER_UDN,
     CONF_SERVERS,
+    CONF_TUNEIN_USERNAME,
     DEFAULT_MAX_TRACKS,
     DOMAIN,
     QOBUZ_AUTO,
@@ -329,6 +330,9 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
                             user_input.get(CONF_MAX_TRACKS, DEFAULT_MAX_TRACKS)
                         ),
                         CONF_QOBUZ_SERVER: user_input.get(CONF_QOBUZ_SERVER, QOBUZ_AUTO),
+                        CONF_TUNEIN_USERNAME: str(
+                            user_input.get(CONF_TUNEIN_USERNAME, "")
+                        ).strip(),
                     }
                 )
         else:
@@ -355,7 +359,13 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
                     default=entry.options.get(CONF_QOBUZ_SERVER, QOBUZ_AUTO),
                 ): SelectSelector(
                     SelectSelectorConfig(options=qobuz_options, mode=SelectSelectorMode.DROPDOWN)
-                )
+                ),
+                vol.Optional(
+                    CONF_TUNEIN_USERNAME,
+                    description={
+                        "suggested_value": entry.options.get(CONF_TUNEIN_USERNAME, "")
+                    },
+                ): TextSelector(),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

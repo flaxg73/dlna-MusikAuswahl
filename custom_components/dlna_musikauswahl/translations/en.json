@@ -48,10 +48,12 @@
           "server_selection": "Music servers",
           "manual_servers": "Additional servers (device description URL)",
           "max_tracks": "Max. tracks per load",
-          "qobuz_server": "Qobuz server (DLNA bridge)"
+          "qobuz_server": "Qobuz server (DLNA bridge)",
+          "tunein_username": "TuneIn username"
         },
         "data_description": {
-          "qobuz_server": "Server providing Qobuz via DLNA (e.g. upmpdcli or BubbleUPnP Server). Shown in the library card under “Qobuz”."
+          "qobuz_server": "Server providing Qobuz via DLNA (e.g. upmpdcli or BubbleUPnP Server). Shown in the library card under “Qobuz”.",
+          "tunein_username": "Your TuneIn username (no password needed). Your TuneIn favourites then appear in the radio section of the library card."
         }
       }
     },

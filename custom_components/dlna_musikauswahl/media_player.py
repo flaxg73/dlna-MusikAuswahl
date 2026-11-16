@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from typing import Any
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 import voluptuous as vol
 from async_upnp_client.exceptions import UpnpError
@@ -203,6 +203,7 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         self._servers: dict[str, MediaServer] = data.servers
         self._max_tracks = data.max_tracks
         self._qobuz_udn = data.qobuz_udn
+        self._tunein_username = data.tunein_username
         self._tunein: TuneInClient | None = None
         device = data.renderer.device
         self._attr_unique_id = data.renderer.udn
@@ -1169,9 +1170,23 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             raise HomeAssistantError(f"Linn renderer not reachable: {err}") from err
         children = [self._radio_item(e) for e in radio_page.entries]
         root = kind not in ("b", "presets")
-        if root and self._renderer is not None and self._renderer.has_radio:
+        if root and self._tunein_username:
             children.insert(
                 0,
+                {
+                    "id": self._radio_id(
+                        "b", urlencode({"c": "presets", "username": self._tunein_username})
+                    ),
+                    "title": "Meine TuneIn-Favoriten",
+                    "subtitle": self._tunein_username,
+                    "kind": "playlist",
+                    "container": True,
+                    "image": None,
+                },
+            )
+        if root and self._renderer is not None and self._renderer.has_radio:
+            children.insert(
+                1 if self._tunein_username else 0,
                 {
                     "id": self._radio_id("presets", "linn"),
                     "title": "Meine Sender (Linn)",
@@ -1181,9 +1196,14 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                     "image": None,
                 },
             )
+        title = radio_page.title
+        if kind == "b" and "c=presets" in value:
+            title = "Meine TuneIn-Favoriten"
+            if not children:
+                page["message"] = "tunein_no_presets"
         return {
             **page,
-            "title": "Radio" if root else radio_page.title,
+            "title": "Radio" if root else title,
             "children": children,
             "total": len(children),
             "root": root,

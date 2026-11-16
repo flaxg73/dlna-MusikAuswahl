@@ -12,6 +12,7 @@ CONF_RENDERER_NAME: Final = "renderer_name"
 CONF_SERVERS: Final = "servers"
 CONF_MAX_TRACKS: Final = "max_tracks"
 CONF_QOBUZ_SERVER: Final = "qobuz_server"
+CONF_TUNEIN_USERNAME: Final = "tunein_username"
 QOBUZ_NONE: Final = "none"
 QOBUZ_AUTO: Final = "auto"
 QOBUZ_NAME_HINTS: Final = ("qobuz", "upmpd", "bubbleupnp")
@@ -53,6 +54,6 @@ SERVICE_MOVE_TRACK: Final = "move_track"
 
 FRONTEND_URL: Final = "/dlna_musikauswahl"
 CARDS: Final = ("linn-playlist-card.js", "linn-library-card.js")
-CARD_VERSION: Final = "0.5.1"
+CARD_VERSION: Final = "0.6.0"
 ATTR_MODE: Final = "mode"
 ATTR_PLAY: Final = "play"

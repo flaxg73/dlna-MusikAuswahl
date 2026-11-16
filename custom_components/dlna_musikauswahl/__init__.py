@@ -29,6 +29,7 @@ from .const import (
     CONF_RENDERER_LOCATION,
     CONF_RENDERER_UDN,
     CONF_SERVERS,
+    CONF_TUNEIN_USERNAME,
     DEFAULT_MAX_TRACKS,
     DOMAIN,
     FRONTEND_URL,
@@ -208,6 +209,7 @@ class RuntimeData:
     servers: dict[str, MediaServer] = field(default_factory=dict)
     max_tracks: int = DEFAULT_MAX_TRACKS
     qobuz_udn: str | None = None
+    tunein_username: str | None = None
 
 
 def qobuz_server_udn(option: str | None, servers: list[dict[str, str]]) -> str | None:
@@ -262,6 +264,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MusikConfigEntry) -> boo
         renderer=renderer,
         servers=servers,
         max_tracks=int(entry.options.get(CONF_MAX_TRACKS, DEFAULT_MAX_TRACKS)),
+        tunein_username=(entry.options.get(CONF_TUNEIN_USERNAME) or "").strip() or None,
         qobuz_udn=qobuz_server_udn(
             entry.options.get(CONF_QOBUZ_SERVER), _servers_config(entry)
         ),

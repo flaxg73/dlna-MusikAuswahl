@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.5.1";
+const CARD_VERSION = "0.6.0";
 
 const STRINGS = {
   de: {
@@ -47,6 +47,8 @@ const STRINGS = {
     close: "Schließen",
     tabs: { server: "Musik-Server", qobuz: "Qobuz", radio: "Radio" },
     configuredServers: "In der Integration eingerichtete Server",
+    noPresets:
+      "Keine TuneIn-Favoriten gefunden. Prüfe den Benutzernamen in den Optionen der Integration und ob in deinem TuneIn-Konto Favoriten gespeichert sind.",
     retry: "Erneut prüfen",
     searchRadio: "Sender suchen …",
     radioPlaying: (name) => `📻 ${name} wird gespielt`,
@@ -88,6 +90,8 @@ const STRINGS = {
     close: "Close",
     tabs: { server: "Music server", qobuz: "Qobuz", radio: "Radio" },
     configuredServers: "Servers set up in the integration",
+    noPresets:
+      "No TuneIn favourites found. Check the username in the integration options and that your TuneIn account has favourites.",
     retry: "Check again",
     searchRadio: "Search stations …",
     radioPlaying: (name) => `📻 Playing ${name}`,
@@ -702,6 +706,9 @@ class LinnLibraryCard extends HTMLElement {
       return `<div class="message info"><ha-icon icon="mdi:music-circle"></ha-icon><div>${esc(t.qobuzMissing)}</div>
         ${servers.length ? `<div class="hint">${esc(t.configuredServers)}: ${esc(servers.join(", "))}</div>` : ""}
         <button class="text primary" data-action="retry"><ha-icon icon="mdi:refresh"></ha-icon> ${esc(t.retry)}</button></div>`;
+    }
+    if (!this._searchOpen && this._page?.message === "tunein_no_presets") {
+      return `<div class="message info"><ha-icon icon="mdi:star-outline"></ha-icon><div>${esc(t.noPresets)}</div></div>`;
     }
     if (!this._searchOpen && this._tab === "radio" && this._page) {
       return this._items.length ? this._renderRadio(this._items) : `<div class="message">${esc(t.empty)}</div>`;

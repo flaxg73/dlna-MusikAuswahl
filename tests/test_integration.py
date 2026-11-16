@@ -694,3 +694,40 @@ async def test_qobuz_option_adds_server(hass: HomeAssistant, fake: FakeUpnp) -> 
     await hass.async_block_till_done()
     assert [s["udn"] for s in entry.options[CONF_SERVERS]] == [SERVER_UDN, QOBUZ_UDN]
     assert entry.runtime_data.qobuz_udn == QOBUZ_UDN
+
+
+
+@pytest.mark.parametrize(("username", "expected"), [("flo", ["Radio Eins"]), ("nobody", [])])
+async def test_tunein_favourites(
+    hass: HomeAssistant, fake: FakeUpnp, hass_ws_client, username, expected
+) -> None:
+    """With a TuneIn username the favourites appear at the top of the radio tab."""
+    await _setup(hass, fake, options={"tunein_username": f" {username} "})
+    ws = await _ws_client(hass, hass_ws_client)
+    root = (await ws("browse", source="radio"))["result"]
+    favourites = root["children"][0]
+    assert favourites["title"] == "Meine TuneIn-Favoriten"
+    assert favourites["subtitle"] == username
+    assert root["children"][1]["title"] == "Meine Sender (Linn)"
+    page = (await ws("browse", media_content_id=favourites["id"]))["result"]
+    assert page["title"] == "Meine TuneIn-Favoriten"
+    assert [c["title"] for c in page["children"]] == expected
+    assert any(f"username={username}" in r for r in fake.tunein_requests)
+    if not expected:
+        assert page["message"] == "tunein_no_presets"
+    else:
+        result = await ws("load", media_content_id=page["children"][0]["id"])
+        assert result["success"] and fake.radio_channel[0].endswith("s1001.mp3")
+
+
+async def test_tunein_username_option(hass: HomeAssistant, fake: FakeUpnp) -> None:
+    """The username is set in the options."""
+    entry = await _setup(hass, fake)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"server_selection": [SERVER_UDN], CONF_MAX_TRACKS: 500, "tunein_username": "flo"},
+    )
+    await hass.async_block_till_done()
+    assert entry.options["tunein_username"] == "flo"
+    assert entry.runtime_data.tunein_username == "flo"

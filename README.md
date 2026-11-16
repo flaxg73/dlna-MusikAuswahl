@@ -125,6 +125,12 @@ Oben in der Karte wählst du mit drei Buttons die Quelle:
   Sender. Ein Sender wird auf der **Radio-Quelle** des Linn gespielt, deine Playlist bleibt
   dabei unverändert.
 
+**TuneIn-Favoriten:** Trag unter *Konfigurieren → TuneIn-Benutzername* deinen
+TuneIn-Benutzernamen ein. Ein Passwort ist nicht nötig. Im Radio-Bereich erscheint dann ganz oben
+„Meine TuneIn-Favoriten“. Den Benutzernamen findest du auf tunein.com unter *Profil /
+Einstellungen*. Hast du dich bei TuneIn nur über Google oder Apple angemeldet, lege dort zuerst
+einen Benutzernamen fest.
+
 Mit `sources: [server, radio]` blendest du einzelne Buttons aus.
 
 ```yaml
