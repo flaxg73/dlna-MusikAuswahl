@@ -13,6 +13,7 @@ from aiohttp import web
 
 RENDERER_UDN = "uuid:4c494e4e-0000-0000-0000-000000000001"
 SERVER_UDN = "uuid:6d696e69-0000-0000-0000-000000000002"
+QOBUZ_UDN = "uuid:71626f7a-0000-0000-0000-000000000003"
 
 OH = "urn:av-openhome-org:service:"
 CD = "urn:schemas-upnp-org:service:ContentDirectory:1"
@@ -57,6 +58,19 @@ SERVICES: dict[str, dict[str, tuple[list[tuple[str, str]], list[tuple[str, str]]
         "VolumeMax": ([], [("Value", "ui4")]),
         "Mute": ([], [("Value", "boolean")]),
         "SetMute": ([("Value", "boolean")], []),
+    },
+    f"{OH}Radio:1": {
+        "Play": ([], []),
+        "Pause": ([], []),
+        "Stop": ([], []),
+        "TransportState": ([], [("Value", "string")]),
+        "Id": ([], [("Value", "ui4")]),
+        "SetId": ([("Value", "ui4"), ("Uri", "string")], []),
+        "SetChannel": ([("Uri", "string"), ("Metadata", "string")], []),
+        "Channel": ([], [("Uri", "string"), ("Metadata", "string")]),
+        "IdArray": ([], [("Token", "ui4"), ("Array", "bin.base64")]),
+        "ReadList": ([("IdList", "string")], [("ChannelList", "string")]),
+        "ChannelsMax": ([], [("Value", "ui4")]),
     },
     f"{OH}Info:1": {
         "Track": ([], [("Uri", "string"), ("Metadata", "string")]),
@@ -140,15 +154,17 @@ def scpd(service_type: str) -> str:
     )
 
 
-def device_xml(device_type: str, name: str, udn: str, services: list[str]) -> str:
+def device_xml(
+    device_type: str, name: str, udn: str, services: list[str], prefix: str = ""
+) -> str:
     """Build a device description."""
     service_xml = "".join(
         f"<service><serviceType>{st}</serviceType>"
         f"<serviceId>urn:{'upnp-org' if 'schemas-upnp' in st else 'av-openhome-org'}"
         f":serviceId:{_short(st)}</serviceId>"
         f"<SCPDURL>/{_short(st)}.xml</SCPDURL>"
-        f"<controlURL>/ctl/{_short(st)}</controlURL>"
-        f"<eventSubURL>/evt/{_short(st)}</eventSubURL></service>"
+        f"<controlURL>{prefix}/ctl/{_short(st)}</controlURL>"
+        f"<eventSubURL>{prefix}/evt/{_short(st)}</eventSubURL></service>"
         for st in services
     )
     return (
@@ -207,7 +223,17 @@ class Library:
             self.children[parent].append(oid)
 
     def didl(self, oid: str) -> str:
-        obj = self.objects[oid]
+        obj = dict(self.objects[oid])
+        if obj["art"] and obj["art"].startswith("http"):
+            obj["art"] = obj["art"].removeprefix(self.base)  # absolute URL, no prefix
+            base_saved, self.base = self.base, ""
+            try:
+                return self._didl(oid, obj)
+            finally:
+                self.base = base_saved
+        return self._didl(oid, obj)
+
+    def _didl(self, oid: str, obj: dict) -> str:
         title = escape(obj["title"])
         if obj["class"].startswith("object.container"):
             art = (f"<upnp:albumArtURI>{self.base}{obj['art']}</upnp:albumArtURI>"
@@ -238,6 +264,49 @@ class Library:
         )
 
 
+def qobuz_library(base_url: str) -> Library:
+    """Library of a DLNA bridge like BubbleUPnP Server: Qobuz next to other services."""
+    lib = Library.__new__(Library)
+    lib.base = base_url
+    lib.objects = {}
+    lib.children = {}
+    lib._add("0", "-1", "Root", "object.container")
+    lib._add("q", "0", "Qobuz", "object.container")
+    lib._add("tidal", "0", "TIDAL", "object.container")
+    lib._add("q-albums", "q", "Meine Alben", "object.container")
+    lib._add("qa1", "q-albums", "Qobuz Album", "object.container.album.musicAlbum",
+             art="https://static.qobuz.example/qa1.jpg")
+    for n in (1, 2):
+        lib._add(f"qa1-t{n}", "qa1", f"Qobuz Track {n}", "object.item.audioItem.musicTrack",
+                 album="Qobuz Album", track=n)
+    return lib
+
+
+TUNEIN_ROOT = {
+    "head": {"title": "Browse", "status": "200"},
+    "body": [
+        {"element": "outline", "type": "link", "text": "Lokales Radio",
+         "URL": "http://opml.radiotime.com/Browse.ashx?c=local", "key": "local"},
+        {"element": "outline", "type": "link", "text": "Musik",
+         "URL": "http://opml.radiotime.com/Browse.ashx?c=music", "key": "music"},
+    ],
+}
+TUNEIN_LOCAL = {
+    "head": {"title": "Lokales Radio", "status": "200"},
+    "body": [
+        {"element": "outline", "text": "Sender", "key": "stations", "children": [
+            {"element": "outline", "type": "audio", "text": "Radio Eins",
+             "URL": "http://opml.radiotime.com/Tune.ashx?id=s1001", "guide_id": "s1001",
+             "subtext": "Nur für Erwachsene", "bitrate": "128", "formats": "mp3",
+             "image": "http://cdn-radiotime-logos.tunein.com/s1001q.png", "item": "station"},
+            {"element": "outline", "type": "audio", "text": "Jazz FM",
+             "URL": "http://opml.radiotime.com/Tune.ashx?id=s1002", "guide_id": "s1002",
+             "bitrate": "64", "formats": "aac", "item": "station"},
+        ]},
+    ],
+}
+
+
 # --------------------------------------------------------------------- server
 class SoapFault(Exception):
     """UPnP error returned by a fake action."""
@@ -256,6 +325,16 @@ class FakeUpnp:
         """Create the state."""
         self.base = ""
         self.library: Library | None = None
+        self.qobuz: Library | None = None
+        # radio state
+        self.radio_channel: tuple[str, str] | None = None
+        self.radio_id = 0
+        self.radio_transport = "Stopped"
+        self.radio_presets = {
+            7: ("http://streams.example/bayern3.mp3", "Bayern 3"),
+            9: ("http://streams.example/fm4.mp3", "FM4"),
+        }
+        self.tunein_requests: list[str] = []
         # renderer state
         self.playlist: list[tuple[int, str, str]] = []
         self.next_id = 1
@@ -277,6 +356,10 @@ class FakeUpnp:
         app = web.Application()
         app.router.add_get("/renderer.xml", self._renderer_xml)
         app.router.add_get("/server.xml", self._server_xml)
+        app.router.add_get("/qobuz.xml", self._qobuz_xml)
+        app.router.add_post("/q/ctl/{svc}", self._control)
+        app.router.add_get("/opml/{endpoint}", self._opml)
+        app.router.add_get("/streams/{name}", self._stream_playlist)
         app.router.add_get("/art/{name}", self._art)
         app.router.add_get(r"/{svc}.xml", self._scpd)
         app.router.add_post("/ctl/{svc}", self._control)
@@ -286,7 +369,7 @@ class FakeUpnp:
         return web.Response(
             text=device_xml(
                 "urn:linn-co-uk:device:Source:1", "Wohnzimmer", RENDERER_UDN,
-                [f"{OH}{s}:1" for s in ("Product", "Playlist", "Volume", "Info", "Time")],
+                [f"{OH}{s}:1" for s in ("Product", "Playlist", "Volume", "Info", "Time", "Radio")],
             ),
             content_type="text/xml",
         )
@@ -298,6 +381,43 @@ class FakeUpnp:
             ),
             content_type="text/xml",
         )
+
+    async def _qobuz_xml(self, request: web.Request) -> web.Response:
+        return web.Response(
+            text=device_xml(
+                "urn:schemas-upnp-org:device:MediaServer:1", "UpMpd-mediaserver", QOBUZ_UDN,
+                [CD, CM], prefix="/q",
+            ),
+            content_type="text/xml",
+        )
+
+    async def _opml(self, request: web.Request) -> web.Response:
+        endpoint = request.match_info["endpoint"]
+        query = dict(request.query)
+        self.tunein_requests.append(f"{endpoint}?{request.query_string}")
+        assert query.get("render") == "json"
+        if endpoint == "Browse.ashx":
+            data = TUNEIN_LOCAL if query.get("c") == "local" else TUNEIN_ROOT
+        elif endpoint == "Search.ashx":
+            hits = [s for s in TUNEIN_LOCAL["body"][0]["children"]
+                    if query["query"].lower() in s["text"].lower()]
+            data = {"head": {"status": "200"}, "body": hits}
+        elif endpoint == "Tune.ashx":
+            if query["id"] == "s1002":  # playlist file, not a direct stream
+                body = [{"url": f"{self.base}/streams/jazz.pls", "is_direct": False}]
+            else:
+                body = [{"url": f"http://streams.example/{query['id']}.mp3", "is_direct": True,
+                         "bitrate": 128, "media_type": "mp3"}]
+            data = {"head": {"status": "200"}, "body": body}
+        elif endpoint == "Describe.ashx":
+            data = {"head": {"status": "200"},
+                    "body": [{"element": "station", "name": "Described FM", "logo": None}]}
+        else:
+            raise web.HTTPNotFound
+        return web.json_response(data)
+
+    async def _stream_playlist(self, request: web.Request) -> web.Response:
+        return web.Response(text="[playlist]\nNumberOfEntries=1\nFile1=http://streams.example/jazz.aac\n")
 
     async def _art(self, request: web.Request) -> web.Response:
         return web.Response(body=b"\xff\xd8JPEGDATA", content_type="image/jpeg")
@@ -312,6 +432,7 @@ class FakeUpnp:
     async def _control(self, request: web.Request) -> web.Response:
         short = request.match_info["svc"]
         service_type = next(st for st in SERVICES if _short(st) == short)
+        self._active_library = self.qobuz if request.path.startswith("/q/") else self.library
         body = ET.fromstring(await request.text())
         action_el = next(iter(next(iter(body))))
         action = action_el.tag.rsplit("}", 1)[-1]
@@ -480,6 +601,60 @@ class FakeUpnp:
         self.mute = Value in ("1", "true")
         return {}
 
+    # ------------------------------------------------------------------- radio
+    def _Radio_Play(self):
+        self.radio_transport = "Playing"
+        return {}
+
+    def _Radio_Pause(self):
+        self.radio_transport = "Paused"
+        return {}
+
+    def _Radio_Stop(self):
+        self.radio_transport = "Stopped"
+        return {}
+
+    def _Radio_TransportState(self):
+        return {"Value": self.radio_transport}
+
+    def _Radio_Id(self):
+        return {"Value": self.radio_id}
+
+    def _Radio_SetId(self, Value, Uri):
+        assert self.radio_presets[int(Value)][0] == Uri
+        self.radio_id = int(Value)
+        self.radio_channel = (Uri, "")
+        return {}
+
+    def _Radio_SetChannel(self, Uri, Metadata):
+        ET.fromstring(Metadata)
+        self.radio_id = 0
+        self.radio_channel = (Uri, Metadata)
+        return {}
+
+    def _Radio_Channel(self):
+        uri, metadata = self.radio_channel or ("", "")
+        return {"Uri": uri, "Metadata": metadata}
+
+    def _Radio_IdArray(self):
+        ids = [7, 0, 9]  # 0 = empty preset slot
+        raw = struct.pack(f">{len(ids)}I", *ids)
+        return {"Token": 1, "Array": base64.b64encode(raw).decode()}
+
+    def _Radio_ReadList(self, IdList):
+        entries = ""
+        for i in (int(x) for x in IdList.split()):
+            uri, name = self.radio_presets[i]
+            meta = (f'{DIDL_OPEN}<item id="{i}" parentID="-1" restricted="1"><dc:title>{name}</dc:title>'
+                    "<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>"
+                    f"<upnp:albumArtURI>https://logos.example/{i}.png</upnp:albumArtURI>"
+                    f'<res protocolInfo="http-get:*:audio/mpeg:*">{uri}</res></item></DIDL-Lite>')
+            entries += f"<Entry><Id>{i}</Id><Metadata>{escape(meta)}</Metadata></Entry>"
+        return {"ChannelList": f"<ChannelList>{entries}</ChannelList>"}
+
+    def _Radio_ChannelsMax(self):
+        return {"Value": 100}
+
     # -------------------------------------------------------------- info/time
     def _Info_Track(self):
         for i, uri, metadata in self.playlist:
@@ -493,7 +668,7 @@ class FakeUpnp:
     # -------------------------------------------------------- content directory
     def _ContentDirectory_Browse(self, ObjectID, BrowseFlag, Filter, StartingIndex,
                                  RequestedCount, SortCriteria):
-        lib = self.library
+        lib = self._active_library
         assert lib is not None
         if BrowseFlag == "BrowseMetadata":
             if self.metadata_quirk == "error":
@@ -521,7 +696,7 @@ class FakeUpnp:
 
     def _ContentDirectory_Search(self, ContainerID, SearchCriteria, Filter, StartingIndex,
                                  RequestedCount, SortCriteria):
-        lib = self.library
+        lib = self._active_library
         assert lib is not None
         quirks = self.search_quirks
         if "unsupported" in quirks:

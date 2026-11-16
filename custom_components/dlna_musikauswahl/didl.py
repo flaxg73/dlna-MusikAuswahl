@@ -156,3 +156,17 @@ def parse_duration(value: str | None) -> int | None:
     except ValueError:
         return None
     return seconds
+
+
+def radio_metadata(item_id: str, title: str, image: str | None, uri: str) -> str:
+    """DIDL-Lite document for a radio stream (shown on the Linn display/app)."""
+    art = f"<upnp:albumArtURI>{escape(image)}</upnp:albumArtURI>" if image else ""
+    return (
+        _DIDL_HEADER
+        + f'<item id={quoteattr(item_id)} parentID="-1" restricted="1">'
+        + f"<dc:title>{escape(title)}</dc:title>"
+        + "<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>"
+        + art
+        + f'<res protocolInfo="http-get:*:*:*">{escape(uri)}</res></item>'
+        + _DIDL_FOOTER
+    )

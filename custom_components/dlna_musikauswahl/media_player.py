@@ -30,6 +30,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -51,6 +52,7 @@ from .const import (
     SERVICE_REMOVE_TRACKS,
     URI_SCHEME,
     URI_SCHEME_QUEUE,
+    URI_SCHEME_RADIO,
 )
 from .didl import (
     album_art_uri,
@@ -59,11 +61,13 @@ from .didl import (
     is_playable_audio_item,
     parse_duration,
     parse_metadata,
+    radio_metadata,
     upnp_class_of,
 )
 from .dms import MediaServer
 from .openhome import OpenHomeRenderer, PlaylistTrack
 from .playlist import PlaylistCache, QueueEntry
+from .tunein import RadioEntry, TuneInClient, TuneInError
 from .upnp import CONNECT_ERRORS
 
 _LOGGER = logging.getLogger(__name__)
@@ -198,6 +202,8 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         self._renderer: OpenHomeRenderer | None = data.renderer
         self._servers: dict[str, MediaServer] = data.servers
         self._max_tracks = data.max_tracks
+        self._qobuz_udn = data.qobuz_udn
+        self._tunein: TuneInClient | None = None
         device = data.renderer.device
         self._attr_unique_id = data.renderer.udn
         self._attr_device_info = DeviceInfo(
@@ -383,8 +389,16 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
 
     # -------------------------------------------------------------- playlist
     def _art_url(self, art: str | None) -> str | None:
-        """Cover URL proxied through Home Assistant (avoids mixed content)."""
-        if not art or not self._is_server_host(art):
+        """Cover URL for the frontend.
+
+        https images (Qobuz, TuneIn CDNs) are used directly; http images of
+        the media servers are proxied through Home Assistant (mixed content).
+        """
+        if not art:
+            return None
+        if art.startswith("https://"):
+            return art
+        if not self._is_server_host(art):
             return None
         return self.get_browse_image_url("cover", "cover", art)
 
@@ -580,6 +594,8 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         media_type: str | None = None,
     ) -> int:
         """Load media into the playlist and return the number of tracks."""
+        if media_content_id.startswith(f"{URI_SCHEME_RADIO}://"):
+            return await self._async_play_radio(media_content_id, mode)
         tracks = await self._async_tracks_for(media_content_id, media_type)
         if not tracks:
             raise ServiceValidationError(
@@ -901,10 +917,18 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         }
 
     async def async_library_browse(
-        self, media_content_id: str | None, start: int = 0
+        self, media_content_id: str | None, start: int = 0, source: str = "server"
     ) -> dict[str, Any]:
         """Browse payload for the library card."""
+        if media_content_id and media_content_id.startswith(f"{URI_SCHEME_RADIO}://"):
+            return await self._async_radio_browse(media_content_id)
+        if not media_content_id and source == "radio":
+            return await self._async_radio_browse(f"{URI_SCHEME_RADIO}://")
+        if not media_content_id and source == "qobuz":
+            return await self._async_qobuz_root(start)
         if not media_content_id:
+            servers = [s for s in self._servers.values() if s.udn != self._qobuz_udn]
+            servers = servers or list(self._servers.values())
             return {
                 "id": None,
                 "title": None,
@@ -921,9 +945,9 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                         "container": True,
                         "image": None,
                     }
-                    for server in self._servers.values()
+                    for server in servers
                 ],
-                "total": len(self._servers),
+                "total": len(servers),
                 "next_start": None,
             }
         try:
@@ -970,10 +994,22 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         }
 
     async def async_library_search(
-        self, text: str, media_content_id: str | None = None
+        self, text: str, media_content_id: str | None = None, source: str = "server"
     ) -> dict[str, Any]:
         """Search payload for the library card."""
+        if source == "radio":
+            try:
+                found = await self._tunein_client().search(text)
+            except TuneInError as err:
+                raise HomeAssistantError(str(err)) from err
+            return {"query": text, "children": [self._radio_item(e) for e in found]}
         servers: list[tuple[MediaServer, str]]
+        if media_content_id and media_content_id.startswith(f"{URI_SCHEME_RADIO}://"):
+            media_content_id = None
+        if not media_content_id and source == "qobuz":
+            if not self._qobuz_udn or self._qobuz_udn not in self._servers:
+                return {"query": text, "children": []}
+            media_content_id = make_content_id(self._qobuz_udn, "0")
         if media_content_id:
             try:
                 udn, object_id, _start = parse_content_id(media_content_id)
@@ -981,9 +1017,209 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                 raise ServiceValidationError(str(err)) from err
             servers = [(self._server(udn), object_id)]
         else:
-            servers = [(server, "0") for server in self._servers.values()]
+            servers = [
+                (server, "0") for server in self._servers.values() if server.udn != self._qobuz_udn
+            ] or [(server, "0") for server in self._servers.values()]
         found = await self._async_search_objects(servers, text)
         items = [self._library_item(server, obj) for server, obj in found]
         # albums/artists/folders first, then tracks
         items.sort(key=lambda item: not item["container"])
         return {"query": text, "children": items}
+
+    # ----------------------------------------------------------------- qobuz
+    async def _async_qobuz_root(self, start: int) -> dict[str, Any]:
+        """Root of the Qobuz tab: the configured DLNA bridge server."""
+        server = self._servers.get(self._qobuz_udn or "")
+        if server is None:
+            return {
+                "id": None,
+                "title": "Qobuz",
+                "subtitle": None,
+                "kind": "directory",
+                "image": None,
+                "can_play": False,
+                "children": [],
+                "total": 0,
+                "next_start": None,
+                "message": "qobuz_not_configured",
+            }
+        page = await self.async_library_browse(make_content_id(server.udn, "0"), start)
+        # bridges like BubbleUPnP Server offer several services: open "Qobuz" directly
+        if start == 0:
+            qobuz = [
+                c for c in page["children"] if c["container"] and "qobuz" in c["title"].lower()
+            ]
+            if len(qobuz) == 1 and len(page["children"]) > 1:
+                page = await self.async_library_browse(qobuz[0]["id"])
+        page["title"] = "Qobuz"
+        page["can_play"] = False
+        page["root"] = True
+        return page
+
+    # ----------------------------------------------------------------- radio
+    def _tunein_client(self) -> TuneInClient:
+        if self._tunein is None:
+            self._tunein = TuneInClient(
+                async_get_clientsession(self.hass), self.hass.config.language or "de"
+            )
+        return self._tunein
+
+    @staticmethod
+    def _radio_id(kind: str, value: str, **params: str | None) -> str:
+        content_id = f"{URI_SCHEME_RADIO}://{kind}/{quote(value, safe='')}"
+        query = "&".join(f"{k}={quote(v, safe='')}" for k, v in params.items() if v)
+        return f"{content_id}?{query}" if query else content_id
+
+    @staticmethod
+    def _parse_radio_id(content_id: str) -> tuple[str, str, dict[str, str]]:
+        rest = content_id[len(URI_SCHEME_RADIO) + 3 :]
+        path, _, query = rest.partition("?")
+        kind, _, value = path.partition("/")
+        params = {}
+        for part in query.split("&"):
+            key, _, val = part.partition("=")
+            if key:
+                params[key] = unquote(val)
+        return kind, unquote(value), params
+
+    def _radio_item(self, entry: RadioEntry) -> dict[str, Any]:
+        if entry.kind == "link":
+            return {
+                "id": self._radio_id("b", entry.query or ""),
+                "title": entry.title,
+                "subtitle": entry.subtitle,
+                "kind": "directory",
+                "container": True,
+                "image": entry.image,
+                "section": entry.section,
+            }
+        details = " · ".join(
+            x
+            for x in (
+                f"{entry.bitrate} kbit/s" if entry.bitrate else None,
+                (entry.formats or "").upper() or None,
+            )
+            if x
+        )
+        return {
+            "id": self._radio_id("s", entry.guide_id or "", name=entry.title, logo=entry.image),
+            "title": entry.title,
+            "subtitle": entry.subtitle,
+            "details": details or None,
+            "kind": "radio",
+            "container": False,
+            "image": entry.image,
+            "section": entry.section,
+        }
+
+    async def _async_presets(self) -> list[dict[str, Any]]:
+        renderer = await self._async_renderer()
+        presets = []
+        for entry in await renderer.radio_presets():
+            obj = parse_metadata(entry.metadata)
+            uri = entry.uri
+            if obj is not None and not uri:
+                res = next((r for r in getattr(obj, "res", None) or [] if r.uri), None)
+                uri = res.uri if res else ""
+            presets.append(
+                {
+                    "preset_id": entry.id,
+                    "uri": uri,
+                    "title": str(getattr(obj, "title", None) or f"#{entry.id}"),
+                    "image": album_art_uri(obj) if obj is not None else None,
+                }
+            )
+        return presets
+
+    async def _async_radio_browse(self, content_id: str) -> dict[str, Any]:
+        kind, value, _params = self._parse_radio_id(content_id)
+        page: dict[str, Any] = {
+            "id": content_id,
+            "subtitle": None,
+            "kind": "directory",
+            "image": None,
+            "can_play": False,
+            "next_start": None,
+        }
+        try:
+            if kind == "presets":
+                children = [
+                    {
+                        "id": self._radio_id("p", str(p["preset_id"])),
+                        "title": p["title"],
+                        "subtitle": None,
+                        "kind": "radio",
+                        "container": False,
+                        "image": self._art_url(p["image"]) or p["image"],
+                    }
+                    for p in await self._async_presets()
+                ]
+                return {
+                    **page,
+                    "title": "Meine Sender",
+                    "children": children,
+                    "total": len(children),
+                }
+            radio_page = await self._tunein_client().browse(value if kind == "b" else None)
+        except TuneInError as err:
+            raise HomeAssistantError(str(err)) from err
+        except CONNECT_ERRORS as err:
+            self._renderer = None
+            raise HomeAssistantError(f"Linn renderer not reachable: {err}") from err
+        children = [self._radio_item(e) for e in radio_page.entries]
+        root = kind not in ("b", "presets")
+        if root and self._renderer is not None and self._renderer.has_radio:
+            children.insert(
+                0,
+                {
+                    "id": self._radio_id("presets", "linn"),
+                    "title": "Meine Sender (Linn)",
+                    "subtitle": None,
+                    "kind": "playlist",
+                    "container": True,
+                    "image": None,
+                },
+            )
+        return {
+            **page,
+            "title": "Radio" if root else radio_page.title,
+            "children": children,
+            "total": len(children),
+            "root": root,
+        }
+
+    async def _async_play_radio(self, content_id: str, mode: str) -> int:
+        """Play a TuneIn station or a stored Linn station."""
+        kind, value, params = self._parse_radio_id(content_id)
+        try:
+            renderer = await self._async_renderer()
+            if kind == "p":
+                preset = next(
+                    (p for p in await self._async_presets() if str(p["preset_id"]) == value),
+                    None,
+                )
+                if preset is None:
+                    raise ServiceValidationError(f"Station {value} not found on the Linn")
+                await renderer.play_radio_preset(int(value), preset["uri"])
+            elif kind == "s":
+                client = self._tunein_client()
+                url = await client.resolve(value)
+                name, logo = params.get("name"), params.get("logo")
+                if not name:
+                    described = await client.describe(value)
+                    name = described.title if described else value
+                    logo = logo or (described.image if described else None)
+                metadata = radio_metadata(value, name, logo, url)
+                if renderer.has_radio:
+                    await renderer.play_radio(url, metadata)
+                else:
+                    await renderer.load_tracks([PlaylistTrack(url, metadata)], mode)
+            else:
+                raise ServiceValidationError(f"Not a station: {content_id}")
+        except TuneInError as err:
+            raise HomeAssistantError(str(err)) from err
+        except CONNECT_ERRORS as err:
+            self._renderer = None
+            raise HomeAssistantError(f"Playing the station failed: {err}") from err
+        self.async_schedule_update_ha_state(True)
+        return 1

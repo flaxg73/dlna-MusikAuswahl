@@ -111,12 +111,29 @@ Falls die Karte nach einem Update nicht erscheint, lade die Seite einmal neu
 
 ### Bibliothek-Karte
 
+Oben in der Karte wählst du mit drei Buttons die Quelle:
+
+- **Musik-Server**: deine DLNA-Server (MinimServer, Asset, Linn/Kazoo Server …).
+- **Qobuz**: Qobuz über einen DLNA-Brückenserver, z. B. **upmpdcli** mit Qobuz-Plugin oder
+  **BubbleUPnP Server** (beide z. B. als Docker-Container). Den Server fügst du in der
+  Integration wie jeden anderen Musikserver hinzu. Die Karte erkennt ihn automatisch (Name
+  enthält „Qobuz“, „UpMpd“ oder „BubbleUPnP“), oder du wählst ihn unter *Konfigurieren →
+  Qobuz-Server*. Bietet die Brücke mehrere Dienste an, öffnet die Karte direkt deren
+  Qobuz-Ordner. Titel und Alben lädst du wie gewohnt in die Linn-Playlist.
+- **Radio**: Das TuneIn-Verzeichnis (lokale Sender, Musik, Nachrichten, Sprachen …) mit
+  Suche, dazu oben **„Meine Sender (Linn)“**, also die in deinem Linn-Konto gespeicherten
+  Sender. Ein Sender wird auf der **Radio-Quelle** des Linn gespielt, deine Playlist bleibt
+  dabei unverändert.
+
+Mit `sources: [server, radio]` blendest du einzelne Buttons aus.
+
 ```yaml
 type: custom:linn-library-card
 entity: media_player.wohnzimmer
 title: Musik             # optional
 track_action: play       # Klick auf einen Titel: play | next | add | replace
 view: auto               # auto | grid | list
+sources: [server, qobuz, radio]  # optional: angezeigte Quellen
 max_height: 520px        # optional
 ```
 

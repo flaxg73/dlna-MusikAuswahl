@@ -25,6 +25,7 @@ from .const import (
     CARD_VERSION,
     CARDS,
     CONF_MAX_TRACKS,
+    CONF_QOBUZ_SERVER,
     CONF_RENDERER_LOCATION,
     CONF_RENDERER_UDN,
     CONF_SERVERS,
@@ -32,6 +33,9 @@ from .const import (
     DOMAIN,
     FRONTEND_URL,
     LOAD_MODES,
+    QOBUZ_AUTO,
+    QOBUZ_NAME_HINTS,
+    QOBUZ_NONE,
 )
 from .dms import MediaServer
 from .openhome import OpenHomeError, OpenHomeRenderer
@@ -106,6 +110,7 @@ async def _ws_run(connection: websocket_api.ActiveConnection, msg_id: int, coro)
         vol.Required("entity_id"): cv.entity_id,
         vol.Optional("media_content_id"): vol.Any(None, str),
         vol.Optional("start", default=0): vol.All(int, vol.Range(min=0)),
+        vol.Optional("source", default="server"): vol.In(("server", "qobuz", "radio")),
     }
 )
 @websocket_api.async_response
@@ -117,7 +122,9 @@ async def ws_browse(
         await _ws_run(
             connection,
             msg["id"],
-            entity.async_library_browse(msg.get("media_content_id"), msg["start"]),
+            entity.async_library_browse(
+                msg.get("media_content_id"), msg["start"], msg["source"]
+            ),
         )
 
 
@@ -127,6 +134,7 @@ async def ws_browse(
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("query"): vol.All(str, vol.Length(min=1)),
         vol.Optional("media_content_id"): vol.Any(None, str),
+        vol.Optional("source", default="server"): vol.In(("server", "qobuz", "radio")),
     }
 )
 @websocket_api.async_response
@@ -138,7 +146,9 @@ async def ws_search(
         await _ws_run(
             connection,
             msg["id"],
-            entity.async_library_search(msg["query"], msg.get("media_content_id")),
+            entity.async_library_search(
+                msg["query"], msg.get("media_content_id"), msg["source"]
+            ),
         )
 
 
@@ -197,6 +207,20 @@ class RuntimeData:
     renderer: OpenHomeRenderer
     servers: dict[str, MediaServer] = field(default_factory=dict)
     max_tracks: int = DEFAULT_MAX_TRACKS
+    qobuz_udn: str | None = None
+
+
+def qobuz_server_udn(option: str | None, servers: list[dict[str, str]]) -> str | None:
+    """Server used for the Qobuz tab: chosen in the options or guessed by name."""
+    if option == QOBUZ_NONE:
+        return None
+    if option and option != QOBUZ_AUTO:
+        return option if any(s.get("udn") == option for s in servers) else None
+    for server in servers:
+        name = str(server.get("name", "")).lower()
+        if any(hint in name for hint in QOBUZ_NAME_HINTS):
+            return server.get("udn")
+    return None
 
 
 type MusikConfigEntry = ConfigEntry[RuntimeData]
@@ -238,6 +262,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: MusikConfigEntry) -> boo
         renderer=renderer,
         servers=servers,
         max_tracks=int(entry.options.get(CONF_MAX_TRACKS, DEFAULT_MAX_TRACKS)),
+        qobuz_udn=qobuz_server_udn(
+            entry.options.get(CONF_QOBUZ_SERVER), _servers_config(entry)
+        ),
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

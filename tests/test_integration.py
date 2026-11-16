@@ -36,12 +36,14 @@ from custom_components.dlna_musikauswahl.const import (
 )
 from custom_components.dlna_musikauswahl.media_player import make_content_id
 
-from .fake_upnp import RENDERER_UDN, SERVER_UDN, FakeUpnp
+from .fake_upnp import QOBUZ_UDN, RENDERER_UDN, SERVER_UDN, FakeUpnp
 
 ENTITY = "media_player.wohnzimmer"
 
 
-async def _setup(hass: HomeAssistant, fake: FakeUpnp, options=None) -> MockConfigEntry:
+async def _setup(
+    hass: HomeAssistant, fake: FakeUpnp, options=None, qobuz: bool = False
+) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Wohnzimmer",
@@ -52,7 +54,8 @@ async def _setup(hass: HomeAssistant, fake: FakeUpnp, options=None) -> MockConfi
             CONF_RENDERER_NAME: "Wohnzimmer",
             CONF_SERVERS: [
                 {"udn": SERVER_UDN, "name": "MinimServer", "location": f"{fake.base}/server.xml"}
-            ],
+            ] + ([{"udn": QOBUZ_UDN, "name": "UpMpd-mediaserver",
+                   "location": f"{fake.base}/qobuz.xml"}] if qobuz else []),
         },
         options=options or {},
     )
@@ -547,3 +550,125 @@ async def test_search_quirks(
     msg = await client.receive_json()
     assert msg["success"] and msg["result"] == {"count": 1}, msg
     assert fake.playlist[-1][1].endswith(".flac")
+
+
+
+async def _ws_client(hass, hass_ws_client):
+    client = await hass_ws_client(hass)
+    counter = {"id": 0}
+
+    async def ws(type_, **data):
+        counter["id"] += 1
+        await client.send_json({"id": counter["id"], "type": f"dlna_musikauswahl/{type_}",
+                                "entity_id": ENTITY, **data})
+        return await client.receive_json()
+
+    return ws
+
+
+async def test_radio(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> None:
+    """TuneIn browsing/search and playing stations on the radio source."""
+    await _setup(hass, fake)
+    await _load(hass, "album1", "replace")
+    playlist_before = list(fake.playlist)
+    ws = await _ws_client(hass, hass_ws_client)
+
+    root = (await ws("browse", source="radio"))["result"]
+    assert root["title"] == "Radio" and root["root"]
+    assert [c["title"] for c in root["children"]] == [
+        "Meine Sender (Linn)", "Lokales Radio", "Musik"]
+
+    presets = (await ws("browse", media_content_id=root["children"][0]["id"]))["result"]
+    assert [p["title"] for p in presets["children"]] == ["Bayern 3", "FM4"]
+    assert presets["children"][0]["image"] == "https://logos.example/7.png"
+
+    local = (await ws("browse", media_content_id=root["children"][1]["id"]))["result"]
+    assert local["title"] == "Lokales Radio"
+    station = local["children"][0]
+    assert station["title"] == "Radio Eins" and station["kind"] == "radio"
+    assert station["section"] == "Sender" and station["details"] == "128 kbit/s · MP3"
+    assert station["image"] == "https://cdn-radiotime-logos.tunein.com/s1001q.png"
+    assert any("c=local" in r for r in fake.tunein_requests)
+
+    result = await ws("load", media_content_id=station["id"], mode="replace")
+    assert result["success"] and result["result"] == {"count": 1}, result
+    assert fake.radio_channel[0] == "http://streams.example/s1001.mp3"
+    assert "<dc:title>Radio Eins</dc:title>" in fake.radio_channel[1]
+    assert "s1001q.png" in fake.radio_channel[1]
+    assert fake.source_index == 1 and fake.radio_transport == "Playing"
+    assert fake.playlist == playlist_before  # playlist untouched
+
+    # .pls playlist instead of a direct stream
+    await ws("load", media_content_id=local["children"][1]["id"])
+    assert fake.radio_channel[0] == "http://streams.example/jazz.aac"
+
+    found = (await ws("search", query="jazz", source="radio"))["result"]["children"]
+    assert [f["title"] for f in found] == ["Jazz FM"]
+
+    await ws("load", media_content_id=presets["children"][1]["id"])
+    assert fake.radio_id == 9 and fake.radio_channel[0] == "http://streams.example/fm4.mp3"
+
+    # play_media with a station id works as well
+    await hass.services.async_call(
+        MP_DOMAIN, SERVICE_PLAY_MEDIA,
+        {ATTR_ENTITY_ID: ENTITY, ATTR_MEDIA_CONTENT_TYPE: "music",
+         ATTR_MEDIA_CONTENT_ID: station["id"]},
+        blocking=True,
+    )
+    assert fake.radio_channel[0] == "http://streams.example/s1001.mp3"
+
+
+async def test_qobuz_tab(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> None:
+    """A DLNA bridge server is shown in the Qobuz tab, not under the music servers."""
+    await _setup(hass, fake, qobuz=True)
+    ws = await _ws_client(hass, hass_ws_client)
+
+    servers = (await ws("browse"))["result"]
+    assert [c["title"] for c in servers["children"]] == ["MinimServer"]
+
+    qobuz = (await ws("browse", source="qobuz"))["result"]
+    assert qobuz["title"] == "Qobuz" and qobuz["root"]
+    # jumped into the "Qobuz" folder of the bridge
+    assert [c["title"] for c in qobuz["children"]] == ["Meine Alben"]
+    albums = (await ws("browse", media_content_id=qobuz["children"][0]["id"]))["result"]
+    album = albums["children"][0]
+    assert album["image"] == "https://static.qobuz.example/qa1.jpg"
+    result = await ws("load", media_content_id=album["id"], mode="replace")
+    assert result["result"] == {"count": 2}
+    assert fake.playlist[0][1].endswith("qa1-t1.flac")
+
+    found = (await ws("search", query="qobuz track", source="qobuz"))["result"]["children"]
+    assert sorted(f["title"] for f in found) == ["Qobuz Track 1", "Qobuz Track 2"]
+    found = (await ws("search", query="track 1.1"))["result"]["children"]
+    assert [f["title"] for f in found] == ["Track 1.1"]
+
+
+async def test_qobuz_not_configured(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> None:
+    """Without a bridge the Qobuz tab explains how to set it up."""
+    await _setup(hass, fake)
+    ws = await _ws_client(hass, hass_ws_client)
+    qobuz = (await ws("browse", source="qobuz"))["result"]
+    assert qobuz["message"] == "qobuz_not_configured" and qobuz["children"] == []
+
+
+async def test_qobuz_option(hass: HomeAssistant, fake: FakeUpnp) -> None:
+    """The bridge can be chosen (or switched off) in the options."""
+    from custom_components.dlna_musikauswahl import qobuz_server_udn
+
+    servers = [{"udn": "a", "name": "MinimServer"}, {"udn": "b", "name": "BubbleUPnP Media Server"}]
+    assert qobuz_server_udn(None, servers) == "b"
+    assert qobuz_server_udn("auto", servers) == "b"
+    assert qobuz_server_udn("none", servers) is None
+    assert qobuz_server_udn("a", servers) == "a"
+    assert qobuz_server_udn("x", servers) is None
+
+    entry = await _setup(hass, fake, qobuz=True)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"server_selection": [SERVER_UDN, QOBUZ_UDN], CONF_MAX_TRACKS: 500,
+         "qobuz_server": "none"},
+    )
+    await hass.async_block_till_done()
+    assert entry.options["qobuz_server"] == "none"
+    assert entry.runtime_data.qobuz_udn is None

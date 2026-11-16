@@ -11,6 +11,10 @@ CONF_RENDERER_UDN: Final = "renderer_udn"
 CONF_RENDERER_NAME: Final = "renderer_name"
 CONF_SERVERS: Final = "servers"
 CONF_MAX_TRACKS: Final = "max_tracks"
+CONF_QOBUZ_SERVER: Final = "qobuz_server"
+QOBUZ_NONE: Final = "none"
+QOBUZ_AUTO: Final = "auto"
+QOBUZ_NAME_HINTS: Final = ("qobuz", "upmpd", "bubbleupnp")
 
 # keys inside a stored server dict
 SERVER_UDN: Final = "udn"
@@ -31,6 +35,7 @@ ST_MEDIA_SERVERS: Final = (
 # Media browser
 URI_SCHEME: Final = "dlnamusik"
 URI_SCHEME_QUEUE: Final = "dlnamusik-queue"
+URI_SCHEME_RADIO: Final = "dlnamusik-radio"
 BROWSE_PAGE_SIZE: Final = 250
 MAX_RECURSION_DEPTH: Final = 6
 
@@ -48,6 +53,6 @@ SERVICE_MOVE_TRACK: Final = "move_track"
 
 FRONTEND_URL: Final = "/dlna_musikauswahl"
 CARDS: Final = ("linn-playlist-card.js", "linn-library-card.js")
-CARD_VERSION: Final = "0.4.0"
+CARD_VERSION: Final = "0.5.0"
 ATTR_MODE: Final = "mode"
 ATTR_PLAY: Final = "play"

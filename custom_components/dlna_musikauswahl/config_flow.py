@@ -28,12 +28,15 @@ from homeassistant.helpers.service_info.ssdp import SsdpServiceInfo
 
 from .const import (
     CONF_MAX_TRACKS,
+    CONF_QOBUZ_SERVER,
     CONF_RENDERER_LOCATION,
     CONF_RENDERER_NAME,
     CONF_RENDERER_UDN,
     CONF_SERVERS,
     DEFAULT_MAX_TRACKS,
     DOMAIN,
+    QOBUZ_AUTO,
+    QOBUZ_NONE,
     SERVER_LOCATION,
     SERVER_NAME,
     SERVER_UDN,
@@ -316,6 +319,7 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
                         CONF_MAX_TRACKS: int(
                             user_input.get(CONF_MAX_TRACKS, DEFAULT_MAX_TRACKS)
                         ),
+                        CONF_QOBUZ_SERVER: user_input.get(CONF_QOBUZ_SERVER, QOBUZ_AUTO),
                     }
                 )
         else:
@@ -323,12 +327,26 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
             # keep configured servers selectable even if currently offline
             self._discovered = {**known, **discovered}
 
-        return self.async_show_form(
-            step_id="init",
-            data_schema=_servers_schema(
-                self._discovered,
-                list(known),
-                int(entry.options.get(CONF_MAX_TRACKS, DEFAULT_MAX_TRACKS)),
-            ),
-            errors=errors,
+        schema = _servers_schema(
+            self._discovered,
+            list(known),
+            int(entry.options.get(CONF_MAX_TRACKS, DEFAULT_MAX_TRACKS)),
         )
+        qobuz_options = [
+            SelectOptionDict(value=QOBUZ_AUTO, label="Automatisch erkennen / auto-detect"),
+            SelectOptionDict(value=QOBUZ_NONE, label="Kein Qobuz / no Qobuz"),
+        ] + [
+            SelectOptionDict(value=udn, label=cfg[SERVER_NAME])
+            for udn, cfg in self._discovered.items()
+        ]
+        schema = schema.extend(
+            {
+                vol.Optional(
+                    CONF_QOBUZ_SERVER,
+                    default=entry.options.get(CONF_QOBUZ_SERVER, QOBUZ_AUTO),
+                ): SelectSelector(
+                    SelectSelectorConfig(options=qobuz_options, mode=SelectSelectorMode.DROPDOWN)
+                )
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
