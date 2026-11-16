@@ -697,7 +697,10 @@ async def test_qobuz_option_adds_server(hass: HomeAssistant, fake: FakeUpnp) -> 
 
 
 
-@pytest.mark.parametrize(("username", "expected"), [("flo", ["Radio Eins"]), ("nobody", [])])
+@pytest.mark.parametrize(
+    ("username", "expected"),
+    [("flo", ["Radio Eins"]), ("picky", ["Radio Eins"]), ("nobody", [])],
+)
 async def test_tunein_favourites(
     hass: HomeAssistant, fake: FakeUpnp, hass_ws_client, username, expected
 ) -> None:

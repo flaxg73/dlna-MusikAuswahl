@@ -398,8 +398,12 @@ class FakeUpnp:
         assert query.get("render") == "json"
         if endpoint == "Browse.ashx" and query.get("c") == "presets" and "@" in query.get("username", ""):
             raise web.HTTPForbidden
+        if (endpoint == "Browse.ashx" and query.get("c") == "presets"
+                and query.get("username") == "picky" and query.get("partnerId") != "1"):
+            raise web.HTTPForbidden  # only answers with a partner id
         if endpoint == "Browse.ashx" and query.get("c") == "presets":
-            body = TUNEIN_LOCAL["body"][0]["children"][:1] if query.get("username") == "flo" else []
+            body = (TUNEIN_LOCAL["body"][0]["children"][:1]
+                    if query.get("username") in ("flo", "picky") else [])
             data = {"head": {"title": "Presets", "status": "200"}, "body": body}
         elif endpoint == "Browse.ashx":
             data = TUNEIN_LOCAL if query.get("c") == "local" else TUNEIN_ROOT
