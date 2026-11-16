@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.6.2";
+const CARD_VERSION = "0.6.3";
 
 const STRINGS = {
   de: {
@@ -607,7 +607,7 @@ class LinnLibraryCard extends HTMLElement {
 
     let body;
     if (!this._config.entity) body = `<div class="message">${esc(t.noEntity)}</div>`;
-    else body = this._renderNav() + this._renderTabs() + `<div class="scroll">${this._renderContent()}</div>`;
+    else body = this._renderTabs() + this._renderNav() + `<div class="scroll">${this._renderContent()}</div>`;
 
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="${this._config._overlay ? "full" : ""}"><div class="body">${body}${this._renderMenu()}${
       this._toast ? `<div class="toast ${this._toast.error ? "error" : ""}">${esc(this._toast.text)}</div>` : ""
@@ -630,7 +630,8 @@ class LinnLibraryCard extends HTMLElement {
   _renderNav() {
     const t = this._t;
     const canBack = this._canBack;
-    const close = this._config._overlay
+    // in fullscreen the close button sits in the top row (tabs) when there is one
+    const close = this._config._overlay && !this._hasTabs
       ? `<button class="icon" data-action="close" title="${esc(t.close)}"><ha-icon icon="mdi:close"></ha-icon></button>`
       : "";
     if (this._searchOpen) {
@@ -663,11 +664,18 @@ class LinnLibraryCard extends HTMLElement {
       </div>`;
   }
 
+  get _hasTabs() {
+    return this._sources.length > 1;
+  }
+
   _renderTabs() {
     const sources = this._sources;
-    if (sources.length < 2 || this._searchOpen) return "";
+    if (!this._hasTabs) return "";
     const t = this._t;
-    return `<div class="tabs">${sources
+    const close = this._config._overlay
+      ? `<button class="icon" data-action="close" title="${esc(t.close)}"><ha-icon icon="mdi:close"></ha-icon></button>`
+      : "";
+    return `<div class="tabs">${close}${sources
       .map(
         (src) =>
           `<button class="tab ${src === this._tab ? "active" : ""}" data-action="tab" data-tab="${src}"><ha-icon icon="${TAB_ICON[src]}"></ha-icon><span>${esc(t.tabs[src])}</span></button>`
@@ -1001,7 +1009,9 @@ const STYLE = `
                   font: inherit; color: var(--primary-text-color); background: var(--secondary-background-color, transparent); outline: none; }
   .search-input:focus { border-color: var(--primary-color); }
   .scroll { overflow-y: auto; flex: 1; overscroll-behavior: contain; }
-  .tabs { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--divider-color); overflow-x: auto; }
+  .tabs { display: flex; align-items: center; gap: 6px; padding: 10px 12px 6px; overflow-x: auto; }
+  .full .tabs { padding-top: calc(10px + env(safe-area-inset-top, 0px)); }
+  .full .tabs + .nav { padding-top: 8px; }
   .tab { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px 0 10px; border-radius: 17px;
          border: 1px solid var(--divider-color); color: var(--primary-text-color); font-weight: 500; white-space: nowrap;
          --mdc-icon-size: 18px; transition: background 0.15s, color 0.15s; }

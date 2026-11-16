@@ -1114,25 +1114,6 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             "section": entry.section,
         }
 
-    async def _async_presets(self) -> list[dict[str, Any]]:
-        renderer = await self._async_renderer()
-        presets = []
-        for entry in await renderer.radio_presets():
-            obj = parse_metadata(entry.metadata)
-            uri = entry.uri
-            if obj is not None and not uri:
-                res = next((r for r in getattr(obj, "res", None) or [] if r.uri), None)
-                uri = res.uri if res else ""
-            presets.append(
-                {
-                    "preset_id": entry.id,
-                    "uri": uri,
-                    "title": str(getattr(obj, "title", None) or f"#{entry.id}"),
-                    "image": album_art_uri(obj) if obj is not None else None,
-                }
-            )
-        return presets
-
     async def _async_radio_browse(self, content_id: str) -> dict[str, Any]:
         kind, value, _params = self._parse_radio_id(content_id)
         page: dict[str, Any] = {
@@ -1144,24 +1125,6 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             "next_start": None,
         }
         try:
-            if kind == "presets":
-                children = [
-                    {
-                        "id": self._radio_id("p", str(p["preset_id"])),
-                        "title": p["title"],
-                        "subtitle": None,
-                        "kind": "radio",
-                        "container": False,
-                        "image": self._art_url(p["image"]) or p["image"],
-                    }
-                    for p in await self._async_presets()
-                ]
-                return {
-                    **page,
-                    "title": "Meine Sender",
-                    "children": children,
-                    "total": len(children),
-                }
             radio_page = await self._tunein_client().browse(value if kind == "b" else None)
         except TuneInError as err:
             if kind == "b" and "c=presets" in value:
@@ -1175,11 +1138,8 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                     "message": "tunein_presets_failed",
                 }
             raise HomeAssistantError(str(err)) from err
-        except CONNECT_ERRORS as err:
-            self._renderer = None
-            raise HomeAssistantError(f"Linn renderer not reachable: {err}") from err
         children = [self._radio_item(e) for e in radio_page.entries]
-        root = kind not in ("b", "presets")
+        root = kind != "b"
         if root and self._tunein_username:
             children.insert(
                 0,
@@ -1189,18 +1149,6 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                     ),
                     "title": "Meine TuneIn-Favoriten",
                     "subtitle": self._tunein_username,
-                    "kind": "playlist",
-                    "container": True,
-                    "image": None,
-                },
-            )
-        if root and self._renderer is not None and self._renderer.has_radio:
-            children.insert(
-                1 if self._tunein_username else 0,
-                {
-                    "id": self._radio_id("presets", "linn"),
-                    "title": "Meine Sender (Linn)",
-                    "subtitle": None,
                     "kind": "playlist",
                     "container": True,
                     "image": None,
@@ -1220,19 +1168,11 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         }
 
     async def _async_play_radio(self, content_id: str, mode: str) -> int:
-        """Play a TuneIn station or a stored Linn station."""
+        """Play a TuneIn station on the radio source of the Linn."""
         kind, value, params = self._parse_radio_id(content_id)
         try:
             renderer = await self._async_renderer()
-            if kind == "p":
-                preset = next(
-                    (p for p in await self._async_presets() if str(p["preset_id"]) == value),
-                    None,
-                )
-                if preset is None:
-                    raise ServiceValidationError(f"Station {value} not found on the Linn")
-                await renderer.play_radio_preset(int(value), preset["uri"])
-            elif kind == "s":
+            if kind == "s":
                 client = self._tunein_client()
                 url = await client.resolve(value)
                 name, logo = params.get("name"), params.get("logo")

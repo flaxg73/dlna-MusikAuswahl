@@ -121,9 +121,8 @@ Oben in der Karte wählst du mit drei Buttons die Quelle:
   Qobuz-Server*. Bietet die Brücke mehrere Dienste an, öffnet die Karte direkt deren
   Qobuz-Ordner. Titel und Alben lädst du wie gewohnt in die Linn-Playlist.
 - **Radio**: Das TuneIn-Verzeichnis (lokale Sender, Musik, Nachrichten, Sprachen …) mit
-  Suche, dazu oben **„Meine Sender (Linn)“**, also die in deinem Linn-Konto gespeicherten
-  Sender. Ein Sender wird auf der **Radio-Quelle** des Linn gespielt, deine Playlist bleibt
-  dabei unverändert.
+  Suche und, mit TuneIn-Benutzernamen, deinen TuneIn-Favoriten. Ein Sender wird auf der
+  **Radio-Quelle** des Linn gespielt, deine Playlist bleibt dabei unverändert.
 
 **TuneIn-Favoriten:** Trag unter *Konfigurieren → TuneIn-Benutzername* deinen
 TuneIn-Benutzernamen ein. Ein Passwort ist nicht nötig. Im Radio-Bereich erscheint dann ganz oben
