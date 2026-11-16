@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.5.0";
+const CARD_VERSION = "0.5.1";
 
 const STRINGS = {
   de: {
@@ -46,6 +46,8 @@ const STRINGS = {
     error: "Fehler",
     close: "Schließen",
     tabs: { server: "Musik-Server", qobuz: "Qobuz", radio: "Radio" },
+    configuredServers: "In der Integration eingerichtete Server",
+    retry: "Erneut prüfen",
     searchRadio: "Sender suchen …",
     radioPlaying: (name) => `📻 ${name} wird gespielt`,
     qobuzMissing:
@@ -85,6 +87,8 @@ const STRINGS = {
     error: "Error",
     close: "Close",
     tabs: { server: "Music server", qobuz: "Qobuz", radio: "Radio" },
+    configuredServers: "Servers set up in the integration",
+    retry: "Check again",
     searchRadio: "Search stations …",
     radioPlaying: (name) => `📻 Playing ${name}`,
     qobuzMissing:
@@ -404,7 +408,7 @@ class LinnLibraryCard extends HTMLElement {
     this._menu = null;
     this._error = null;
     const state = this._tabState[tab];
-    if (state && state.page) {
+    if (state && state.page && !state.page.message) {
       Object.assign(this, {
         _stack: state.stack,
         _cache: state.cache,
@@ -482,7 +486,8 @@ class LinnLibraryCard extends HTMLElement {
       this._nextStart = page.next_start;
       this._current.title = page.title;
       this._error = null;
-      this._cache.set(id ?? "", { page, items: this._items, nextStart: this._nextStart });
+      // hints like "Qobuz not configured" are not cached: the setup may change
+      if (!page.message) this._cache.set(id ?? "", { page, items: this._items, nextStart: this._nextStart });
       this._saveStack();
     } catch (err) {
       this._error = err?.code === "not_found" ? this._t.notFound : err?.message || String(err);
@@ -693,7 +698,10 @@ class LinnLibraryCard extends HTMLElement {
       return this._results.length ? this._renderRadio(this._results) : `<div class="message">${esc(t.noResults)}</div>`;
     }
     if (!this._searchOpen && this._page?.message === "qobuz_not_configured") {
-      return `<div class="message info"><ha-icon icon="mdi:music-circle"></ha-icon><div>${esc(t.qobuzMissing)}</div></div>`;
+      const servers = this._page.servers || [];
+      return `<div class="message info"><ha-icon icon="mdi:music-circle"></ha-icon><div>${esc(t.qobuzMissing)}</div>
+        ${servers.length ? `<div class="hint">${esc(t.configuredServers)}: ${esc(servers.join(", "))}</div>` : ""}
+        <button class="text primary" data-action="retry"><ha-icon icon="mdi:refresh"></ha-icon> ${esc(t.retry)}</button></div>`;
     }
     if (!this._searchOpen && this._tab === "radio" && this._page) {
       return this._items.length ? this._renderRadio(this._items) : `<div class="message">${esc(t.empty)}</div>`;
@@ -905,6 +913,9 @@ class LinnLibraryCard extends HTMLElement {
 
   _onAction(action, data, btn) {
     switch (action) {
+      case "retry":
+        this._cache.clear();
+        return this._open(this._current.id, false);
       case "tab":
         return this._switchTab(data.tab);
       case "close":
@@ -990,6 +1001,7 @@ const STYLE = `
           box-shadow: 0 0 0 1px var(--divider-color) inset; --mdc-icon-size: 22px; }
   .logo.placeholder { box-shadow: none; }
   .station .play { color: var(--primary-color); --mdc-icon-size: 28px; width: 40px; height: 40px; }
+  .message.info .hint { font-size: 0.85em; }
   .message.info { display: flex; flex-direction: column; align-items: center; gap: 10px; line-height: 1.45; max-width: 520px; margin: 0 auto; }
   .hero { display: flex; gap: 16px; padding: 16px; align-items: center; }
   .hero-art { width: 112px; height: 112px; border-radius: 8px; background: center / cover no-repeat; flex: none;

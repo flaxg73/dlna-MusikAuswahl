@@ -312,6 +312,15 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
             servers, errors = await _async_process_servers(
                 self.hass, user_input, self._discovered, known
             )
+            # a server chosen as Qobuz bridge is added to the servers automatically
+            qobuz = user_input.get(CONF_QOBUZ_SERVER)
+            if (
+                qobuz not in (None, QOBUZ_AUTO, QOBUZ_NONE)
+                and all(srv[SERVER_UDN] != qobuz for srv in servers)
+                and (cfg := self._discovered.get(qobuz) or known.get(qobuz))
+            ):
+                servers.append(cfg)
+                errors.pop("base", None)
             if not errors:
                 return self.async_create_entry(
                     data={

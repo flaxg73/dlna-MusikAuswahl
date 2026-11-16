@@ -649,6 +649,7 @@ async def test_qobuz_not_configured(hass: HomeAssistant, fake: FakeUpnp, hass_ws
     ws = await _ws_client(hass, hass_ws_client)
     qobuz = (await ws("browse", source="qobuz"))["result"]
     assert qobuz["message"] == "qobuz_not_configured" and qobuz["children"] == []
+    assert qobuz["servers"] == ["MinimServer"]
 
 
 async def test_qobuz_option(hass: HomeAssistant, fake: FakeUpnp) -> None:
@@ -672,3 +673,24 @@ async def test_qobuz_option(hass: HomeAssistant, fake: FakeUpnp) -> None:
     await hass.async_block_till_done()
     assert entry.options["qobuz_server"] == "none"
     assert entry.runtime_data.qobuz_udn is None
+
+
+
+async def test_qobuz_option_adds_server(hass: HomeAssistant, fake: FakeUpnp) -> None:
+    """Choosing a discovered server as Qobuz bridge adds it to the servers."""
+    entry = await _setup(hass, fake)
+    discovered = {QOBUZ_UDN: {"udn": QOBUZ_UDN, "name": "Qobuz-mediaserver",
+                              "location": f"{fake.base}/qobuz.xml"}}
+    with patch(
+        "custom_components.dlna_musikauswahl.config_flow._async_discovered_servers",
+        return_value=discovered,
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {"server_selection": [SERVER_UDN], CONF_MAX_TRACKS: 500, "qobuz_server": QOBUZ_UDN},
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert [s["udn"] for s in entry.options[CONF_SERVERS]] == [SERVER_UDN, QOBUZ_UDN]
+    assert entry.runtime_data.qobuz_udn == QOBUZ_UDN

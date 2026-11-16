@@ -1042,6 +1042,7 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                 "total": 0,
                 "next_start": None,
                 "message": "qobuz_not_configured",
+                "servers": [srv.name for srv in self._servers.values()],
             }
         page = await self.async_library_browse(make_content_id(server.udn, "0"), start)
         # bridges like BubbleUPnP Server offer several services: open "Qobuz" directly
