@@ -270,6 +270,8 @@ class FakeUpnp:
         self.calls: list[str] = []
         # simulate servers with broken BrowseMetadata: None | "no_res" | "error"
         self.metadata_quirk: str | None = None
+        # simulate picky Search implementations: "root_only", "strict", "no_res", "unsupported"
+        self.search_quirks: set[str] = set()
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -521,10 +523,21 @@ class FakeUpnp:
                                  RequestedCount, SortCriteria):
         lib = self.library
         assert lib is not None
+        quirks = self.search_quirks
+        if "unsupported" in quirks:
+            raise SoapFault(401, "Invalid Action")
+        if "root_only" in quirks and ContainerID != "0":
+            raise SoapFault(710, "No such container")
+        if "strict" in quirks and (SearchCriteria.startswith("(") or " or " in SearchCriteria
+                                   or "derivedfrom" in SearchCriteria):
+            raise SoapFault(708, "Unsupported or invalid search criteria")
         term = re.search(r'contains "([^"]*)"', SearchCriteria).group(1).lower()
         ids = [o for o, obj in lib.objects.items()
                if o != "0" and term in obj["title"].lower()][: int(RequestedCount) or None]
-        result = DIDL_OPEN + "".join(lib.didl(i) for i in ids) + "</DIDL-Lite>"
+        didl = "".join(lib.didl(i) for i in ids)
+        if "no_res" in quirks:
+            didl = re.sub(r"<res [^>]*>[^<]*</res>", "", didl)
+        result = DIDL_OPEN + didl + "</DIDL-Lite>"
         return {"Result": result, "NumberReturned": len(ids), "TotalMatches": len(ids),
                 "UpdateID": 1}
 

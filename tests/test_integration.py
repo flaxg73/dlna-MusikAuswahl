@@ -521,3 +521,29 @@ async def test_library_websocket(hass: HomeAssistant, fake: FakeUpnp, hass_ws_cl
 
     result = await ws("browse", media_content_id="dlnamusik://uuid%3Anope/0")
     assert not result["success"]
+
+
+@pytest.mark.parametrize(
+    "quirks",
+    [set(), {"root_only"}, {"strict"}, {"no_res"}, {"root_only", "strict", "no_res"},
+     {"unsupported"}],
+)
+async def test_search_quirks(
+    hass: HomeAssistant, fake: FakeUpnp, hass_ws_client, quirks
+) -> None:
+    """Search works with picky servers and loads the found tracks."""
+    await _setup(hass, fake)
+    fake.search_quirks = quirks
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": "dlna_musikauswahl/search", "entity_id": ENTITY,
+                            "query": "track 2.", "media_content_id": _cid("album2")})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    found = msg["result"]["children"]
+    assert sorted(f["title"] for f in found) == ["Track 2.1", "Track 2.2", "Track 2.3"]
+
+    await client.send_json({"id": 2, "type": "dlna_musikauswahl/load", "entity_id": ENTITY,
+                            "media_content_id": found[0]["id"], "mode": "add"})
+    msg = await client.receive_json()
+    assert msg["success"] and msg["result"] == {"count": 1}, msg
+    assert fake.playlist[-1][1].endswith(".flac")

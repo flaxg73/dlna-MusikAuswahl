@@ -66,6 +66,11 @@ def pick_audio_resource(obj: didl_lite.DidlObject) -> didl_lite.Resource | None:
     return None
 
 
+def is_audio_class_item(obj: didl_lite.DidlObject) -> bool:
+    """Return True for audio items, even if the server sent no <res> for them."""
+    return not is_container(obj) and upnp_class_of(obj).startswith("object.item.audioitem")
+
+
 def is_playable_audio_item(obj: didl_lite.DidlObject) -> bool:
     """Return True if the object is an item with an audio stream."""
     return not is_container(obj) and pick_audio_resource(obj) is not None

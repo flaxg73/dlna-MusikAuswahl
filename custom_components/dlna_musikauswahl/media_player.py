@@ -54,6 +54,7 @@ from .const import (
 )
 from .didl import (
     album_art_uri,
+    is_audio_class_item,
     is_container,
     is_playable_audio_item,
     parse_duration,
@@ -865,7 +866,9 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             found += [
                 (server, obj)
                 for obj in objects
-                if is_container(obj) or is_playable_audio_item(obj)
+                # search results often come without <res>: loading such an
+                # item works through its parent container
+                if is_container(obj) or is_playable_audio_item(obj) or is_audio_class_item(obj)
             ]
         return found
 
