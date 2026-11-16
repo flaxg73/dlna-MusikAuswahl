@@ -396,6 +396,8 @@ class FakeUpnp:
         query = dict(request.query)
         self.tunein_requests.append(f"{endpoint}?{request.query_string}")
         assert query.get("render") == "json"
+        if endpoint == "Browse.ashx" and query.get("c") == "presets" and "@" in query.get("username", ""):
+            raise web.HTTPForbidden
         if endpoint == "Browse.ashx" and query.get("c") == "presets":
             body = TUNEIN_LOCAL["body"][0]["children"][:1] if query.get("username") == "flo" else []
             data = {"head": {"title": "Presets", "status": "200"}, "body": body}

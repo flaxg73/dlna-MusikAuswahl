@@ -1164,6 +1164,16 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                 }
             radio_page = await self._tunein_client().browse(value if kind == "b" else None)
         except TuneInError as err:
+            if kind == "b" and "c=presets" in value:
+                # usually a wrong username (e.g. the login e-mail): explain instead of failing
+                _LOGGER.warning("TuneIn favourites could not be loaded: %s", err)
+                return {
+                    **page,
+                    "title": "Meine TuneIn-Favoriten",
+                    "children": [],
+                    "total": 0,
+                    "message": "tunein_presets_failed",
+                }
             raise HomeAssistantError(str(err)) from err
         except CONNECT_ERRORS as err:
             self._renderer = None

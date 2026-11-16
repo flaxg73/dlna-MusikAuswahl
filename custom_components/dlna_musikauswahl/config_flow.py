@@ -313,6 +313,9 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
             servers, errors = await _async_process_servers(
                 self.hass, user_input, self._discovered, known
             )
+            if "@" in str(user_input.get(CONF_TUNEIN_USERNAME, "")):
+                # TuneIn favourites need the public username, not the login e-mail
+                errors[CONF_TUNEIN_USERNAME] = "tunein_email"
             # a server chosen as Qobuz bridge is added to the servers automatically
             qobuz = user_input.get(CONF_QOBUZ_SERVER)
             if (

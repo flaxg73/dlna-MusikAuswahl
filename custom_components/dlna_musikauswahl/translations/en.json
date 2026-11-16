@@ -59,7 +59,8 @@
     },
     "error": {
       "cannot_connect_server": "At least one server is unreachable or not a DLNA media server.",
-      "no_servers": "Please select at least one music server."
+      "no_servers": "Please select at least one music server.",
+      "tunein_email": "Please enter your TuneIn username, not the e-mail address. You find it in your profile on tunein.com."
     }
   },
   "services": {
