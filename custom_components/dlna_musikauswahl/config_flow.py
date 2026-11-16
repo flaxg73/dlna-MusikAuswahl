@@ -33,6 +33,7 @@ from .const import (
     CONF_RENDERER_NAME,
     CONF_RENDERER_UDN,
     CONF_SERVERS,
+    CONF_TUNEIN_USERNAME,
     DEFAULT_MAX_TRACKS,
     DOMAIN,
     QOBUZ_AUTO,
@@ -312,6 +313,15 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
             servers, errors = await _async_process_servers(
                 self.hass, user_input, self._discovered, known
             )
+            # a server chosen as Qobuz bridge is added to the servers automatically
+            qobuz = user_input.get(CONF_QOBUZ_SERVER)
+            if (
+                qobuz not in (None, QOBUZ_AUTO, QOBUZ_NONE)
+                and all(srv[SERVER_UDN] != qobuz for srv in servers)
+                and (cfg := self._discovered.get(qobuz) or known.get(qobuz))
+            ):
+                servers.append(cfg)
+                errors.pop("base", None)
             if not errors:
                 return self.async_create_entry(
                     data={
@@ -320,6 +330,9 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
                             user_input.get(CONF_MAX_TRACKS, DEFAULT_MAX_TRACKS)
                         ),
                         CONF_QOBUZ_SERVER: user_input.get(CONF_QOBUZ_SERVER, QOBUZ_AUTO),
+                        CONF_TUNEIN_USERNAME: str(
+                            user_input.get(CONF_TUNEIN_USERNAME, "")
+                        ).strip(),
                     }
                 )
         else:
@@ -346,7 +359,13 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
                     default=entry.options.get(CONF_QOBUZ_SERVER, QOBUZ_AUTO),
                 ): SelectSelector(
                     SelectSelectorConfig(options=qobuz_options, mode=SelectSelectorMode.DROPDOWN)
-                )
+                ),
+                vol.Optional(
+                    CONF_TUNEIN_USERNAME,
+                    description={
+                        "suggested_value": entry.options.get(CONF_TUNEIN_USERNAME, "")
+                    },
+                ): TextSelector(),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
