@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.6.0";
+const CARD_VERSION = "0.6.2";
 
 const STRINGS = {
   de: {
@@ -47,6 +47,8 @@ const STRINGS = {
     close: "Schließen",
     tabs: { server: "Musik-Server", qobuz: "Qobuz", radio: "Radio" },
     configuredServers: "In der Integration eingerichtete Server",
+    presetsFailed:
+      "TuneIn hat die Favoriten nicht herausgegeben. Meist ist der Benutzername falsch: Benötigt wird der öffentliche TuneIn-Benutzername aus deinem Profil, nicht die E-Mail-Adresse. Ändern unter Einstellungen → Geräte & Dienste → DLNA Musikauswahl → Konfigurieren.",
     noPresets:
       "Keine TuneIn-Favoriten gefunden. Prüfe den Benutzernamen in den Optionen der Integration und ob in deinem TuneIn-Konto Favoriten gespeichert sind.",
     retry: "Erneut prüfen",
@@ -90,6 +92,8 @@ const STRINGS = {
     close: "Close",
     tabs: { server: "Music server", qobuz: "Qobuz", radio: "Radio" },
     configuredServers: "Servers set up in the integration",
+    presetsFailed:
+      "TuneIn did not return the favourites. Usually the username is wrong: the public TuneIn username from your profile is needed, not the e-mail address. Change it in Settings → Devices & services → DLNA Musikauswahl → Configure.",
     noPresets:
       "No TuneIn favourites found. Check the username in the integration options and that your TuneIn account has favourites.",
     retry: "Check again",
@@ -706,6 +710,9 @@ class LinnLibraryCard extends HTMLElement {
       return `<div class="message info"><ha-icon icon="mdi:music-circle"></ha-icon><div>${esc(t.qobuzMissing)}</div>
         ${servers.length ? `<div class="hint">${esc(t.configuredServers)}: ${esc(servers.join(", "))}</div>` : ""}
         <button class="text primary" data-action="retry"><ha-icon icon="mdi:refresh"></ha-icon> ${esc(t.retry)}</button></div>`;
+    }
+    if (!this._searchOpen && this._page?.message === "tunein_presets_failed") {
+      return `<div class="message info"><ha-icon icon="mdi:star-off-outline"></ha-icon><div>${esc(t.presetsFailed)}</div></div>`;
     }
     if (!this._searchOpen && this._page?.message === "tunein_no_presets") {
       return `<div class="message info"><ha-icon icon="mdi:star-outline"></ha-icon><div>${esc(t.noPresets)}</div></div>`;

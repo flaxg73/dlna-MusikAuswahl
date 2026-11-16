@@ -14,6 +14,8 @@ _LOGGER = logging.getLogger(__name__)
 BASE_URL = "https://opml.radiotime.com"
 TIMEOUT = aiohttp.ClientTimeout(total=15)
 PLAYLIST_SUFFIXES = (".pls", ".m3u", ".m3u8", ".asx")
+PARTNER_ID = "1"
+USER_AGENT = "Mozilla/5.0 (compatible; HomeAssistant DLNA-Musikauswahl)"
 
 
 class TuneInError(Exception):
@@ -102,17 +104,29 @@ class TuneInClient:
 
     async def _get_json(self, path: str, params: dict[str, str]) -> dict[str, Any]:
         params = {**params, "render": "json", "formats": "mp3,aac,ogg,flac,hls"}
-        try:
-            async with self._session.get(
-                f"{BASE_URL}/{path}",
-                params=params,
-                headers={"Accept-Language": self._language},
-                timeout=TIMEOUT,
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json(content_type=None)
-        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
-            raise TuneInError(f"TuneIn not reachable: {err}") from err
+        attempts = [
+            (params, {"Accept-Language": self._language}),
+            # TuneIn rejects some clients (403): retry like other players do,
+            # with a partner id and a neutral user agent
+            ({**params, "partnerId": PARTNER_ID}, {
+                "Accept-Language": self._language,
+                "User-Agent": USER_AGENT,
+            }),
+        ]
+        data: dict[str, Any] = {}
+        for number, (query, headers) in enumerate(attempts, start=1):
+            try:
+                async with self._session.get(
+                    f"{BASE_URL}/{path}", params=query, headers=headers, timeout=TIMEOUT
+                ) as resp:
+                    _LOGGER.debug("TuneIn %s (attempt %s): HTTP %s", path, number, resp.status)
+                    if resp.status == 403 and number < len(attempts):
+                        continue
+                    resp.raise_for_status()
+                    data = await resp.json(content_type=None)
+                    break
+            except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+                raise TuneInError(f"TuneIn not reachable: {err}") from err
         status = str(data.get("head", {}).get("status", "200"))
         if status != "200":
             raise TuneInError(data.get("head", {}).get("fault") or f"TuneIn status {status}")

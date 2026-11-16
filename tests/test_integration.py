@@ -697,7 +697,10 @@ async def test_qobuz_option_adds_server(hass: HomeAssistant, fake: FakeUpnp) -> 
 
 
 
-@pytest.mark.parametrize(("username", "expected"), [("flo", ["Radio Eins"]), ("nobody", [])])
+@pytest.mark.parametrize(
+    ("username", "expected"),
+    [("flo", ["Radio Eins"]), ("picky", ["Radio Eins"]), ("nobody", [])],
+)
 async def test_tunein_favourites(
     hass: HomeAssistant, fake: FakeUpnp, hass_ws_client, username, expected
 ) -> None:
@@ -731,3 +734,25 @@ async def test_tunein_username_option(hass: HomeAssistant, fake: FakeUpnp) -> No
     await hass.async_block_till_done()
     assert entry.options["tunein_username"] == "flo"
     assert entry.runtime_data.tunein_username == "flo"
+
+
+
+async def test_tunein_email_instead_of_username(
+    hass: HomeAssistant, fake: FakeUpnp, hass_ws_client
+) -> None:
+    """An e-mail is rejected in the options; TuneIn's 403 becomes a hint in the card."""
+    entry = await _setup(hass, fake, options={"tunein_username": "someone@example.com"})
+    ws = await _ws_client(hass, hass_ws_client)
+    root = (await ws("browse", source="radio"))["result"]
+    page = await ws("browse", media_content_id=root["children"][0]["id"])
+    assert page["success"], page
+    assert page["result"]["message"] == "tunein_presets_failed"
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"server_selection": [SERVER_UDN], CONF_MAX_TRACKS: 500,
+         "tunein_username": "someone@example.com"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"tunein_username": "tunein_email"}
