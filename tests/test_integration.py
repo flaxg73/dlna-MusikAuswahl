@@ -575,14 +575,9 @@ async def test_radio(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> Non
 
     root = (await ws("browse", source="radio"))["result"]
     assert root["title"] == "Radio" and root["root"]
-    assert [c["title"] for c in root["children"]] == [
-        "Meine Sender (Linn)", "Lokales Radio", "Musik"]
+    assert [c["title"] for c in root["children"]] == ["Lokales Radio", "Musik"]
 
-    presets = (await ws("browse", media_content_id=root["children"][0]["id"]))["result"]
-    assert [p["title"] for p in presets["children"]] == ["Bayern 3", "FM4"]
-    assert presets["children"][0]["image"] == "https://logos.example/7.png"
-
-    local = (await ws("browse", media_content_id=root["children"][1]["id"]))["result"]
+    local = (await ws("browse", media_content_id=root["children"][0]["id"]))["result"]
     assert local["title"] == "Lokales Radio"
     station = local["children"][0]
     assert station["title"] == "Radio Eins" and station["kind"] == "radio"
@@ -604,9 +599,6 @@ async def test_radio(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> Non
 
     found = (await ws("search", query="jazz", source="radio"))["result"]["children"]
     assert [f["title"] for f in found] == ["Jazz FM"]
-
-    await ws("load", media_content_id=presets["children"][1]["id"])
-    assert fake.radio_id == 9 and fake.radio_channel[0] == "http://streams.example/fm4.mp3"
 
     # play_media with a station id works as well
     await hass.services.async_call(
@@ -711,7 +703,8 @@ async def test_tunein_favourites(
     favourites = root["children"][0]
     assert favourites["title"] == "Meine TuneIn-Favoriten"
     assert favourites["subtitle"] == username
-    assert root["children"][1]["title"] == "Meine Sender (Linn)"
+    assert root["children"][1]["title"] == "Lokales Radio"
+    assert all("Linn" not in c["title"] for c in root["children"])
     page = (await ws("browse", media_content_id=favourites["id"]))["result"]
     assert page["title"] == "Meine TuneIn-Favoriten"
     assert [c["title"] for c in page["children"]] == expected

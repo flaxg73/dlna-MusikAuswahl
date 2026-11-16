@@ -355,25 +355,6 @@ class OpenHomeRenderer:
         """Return True if the renderer has the OpenHome Radio service."""
         return self.has(self.radio, "SetChannel")
 
-    async def radio_presets(self) -> list[PlaylistEntry]:
-        """Stations stored on the renderer (Linn account presets)."""
-        if not self.has(self.radio, "IdArray"):
-            return []
-        result = await self._call(self.radio, "IdArray")
-        ids = [i for i in decode_id_array(result.get("Array")) if i]
-        if not ids:
-            return []
-        entries: list[PlaylistEntry] = []
-        for start in range(0, len(ids), 50):
-            chunk = ids[start : start + 50]
-            result = await self._call(
-                self.radio, "ReadList", IdList=" ".join(str(i) for i in chunk)
-            )
-            xml = result.get("ChannelList") or result.get("TrackList") or ""
-            entries += parse_track_list(xml)
-        order = {i: n for n, i in enumerate(ids)}
-        return sorted(entries, key=lambda e: order.get(e.id, 0))
-
     async def _ensure_source(self, source_type: str) -> None:
         if self.has(self.product, "Standby") and await self.standby():
             await self.set_standby(False)
@@ -387,12 +368,6 @@ class OpenHomeRenderer:
         """Play a stream on the radio source (the playlist stays untouched)."""
         await self._ensure_source("radio")
         await self._call(self.radio, "SetChannel", Uri=uri, Metadata=metadata)
-        await self._call(self.radio, "Play")
-
-    async def play_radio_preset(self, preset_id: int, uri: str) -> None:
-        """Play one of the stored stations."""
-        await self._ensure_source("radio")
-        await self._call(self.radio, "SetId", Value=preset_id, Uri=uri)
         await self._call(self.radio, "Play")
 
     # ----------------------------------------------------------- high level ops
