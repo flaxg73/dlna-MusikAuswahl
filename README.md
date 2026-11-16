@@ -120,6 +120,21 @@ view: auto               # auto | grid | list
 max_height: 520px        # optional
 ```
 
+**Als Button mit Vollbild-Auswahl:** Mit `display: button` zeigt die Karte im Dashboard nur eine
+kompakte Kachel „Musik auswählen“ mit dem aktuellen Titel. Ein Tipp darauf öffnet die
+Musikauswahl über den ganzen Bildschirm. Zurück zum Dashboard geht es nur mit ✕ oben links.
+Auf breiten Bildschirmen (ab 1000 px) steht rechts daneben die Linn-Playlist; das lässt sich
+mit `playlist_panel: false` abschalten.
+
+```yaml
+type: custom:linn-library-card
+entity: media_player.wohnzimmer
+display: button
+button_name: Musik auswählen        # optional
+button_icon: mdi:music-box-multiple # optional
+playlist_panel: true                # optional
+```
+
 - Ein Klick auf Ordner, Interpret oder Album öffnet es. ← geht zurück, ⌂ springt zum Anfang.
   Bei nur einem Server startet die Karte direkt in dessen Hauptordner.
 - Albumansicht: **Abspielen** ersetzt die Playlist. ⤒ reiht das Album als nächstes ein,

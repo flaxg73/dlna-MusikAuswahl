@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.3.0";
+const CARD_VERSION = "0.4.0";
 
 const STRINGS = {
   de: {
@@ -44,6 +44,10 @@ const STRINGS = {
     notFound: "Entität gehört nicht zur Integration DLNA Musikauswahl",
     noEntity: "Bitte eine Linn-Player-Entität auswählen",
     error: "Fehler",
+    close: "Schließen",
+    buttonName: "Musik auswählen",
+    off: "Standby",
+    idle: "Bereit",
   },
   en: {
     library: "Music",
@@ -74,6 +78,10 @@ const STRINGS = {
     notFound: "Entity does not belong to the DLNA Musikauswahl integration",
     noEntity: "Please select a Linn player entity",
     error: "Error",
+    close: "Close",
+    buttonName: "Choose music",
+    off: "Standby",
+    idle: "Ready",
   },
 };
 
@@ -149,6 +157,21 @@ class LinnLibraryCard extends HTMLElement {
           selector: { select: { mode: "dropdown", options: ["auto", "grid", "list"] } },
         },
         { name: "max_height", selector: { text: {} } },
+        {
+          name: "display",
+          selector: {
+            select: {
+              mode: "dropdown",
+              options: [
+                { value: "inline", label: "Karte im Dashboard / Inline card" },
+                { value: "button", label: "Button → Vollbild / Button → fullscreen" },
+              ],
+            },
+          },
+        },
+        { name: "button_name", selector: { text: {} } },
+        { name: "button_icon", selector: { icon: {} } },
+        { name: "playlist_panel", selector: { boolean: {} } },
       ],
     };
   }
@@ -159,9 +182,25 @@ class LinnLibraryCard extends HTMLElement {
     return { entity: entity || "" };
   }
 
+  get _isButton() {
+    return this._config?.display === "button";
+  }
+
   setConfig(config) {
     const entityChanged = this._config?.entity !== config.entity;
-    this._config = { track_action: "play", view: "auto", max_height: "520px", ...config };
+    this._config = {
+      track_action: "play",
+      view: "auto",
+      max_height: "520px",
+      display: "inline",
+      playlist_panel: true,
+      ...config,
+    };
+    if (this._isButton) {
+      this._overlayChild?.setConfig(this._overlayConfig());
+      this._renderButton();
+      return;
+    }
     if (entityChanged) {
       this._cache.clear();
       this._stack = this._restoreStack();
@@ -172,16 +211,24 @@ class LinnLibraryCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 9;
+    return this._isButton ? 1 : 9;
   }
 
   getGridOptions() {
-    return { columns: 12, min_columns: 6, rows: 9, min_rows: 5 };
+    return this._isButton
+      ? { columns: 6, min_columns: 3, rows: 1, min_rows: 1 }
+      : { columns: 12, min_columns: 6, rows: 9, min_rows: 5 };
   }
 
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    if (this._isButton) {
+      if (this._overlayChild) this._overlayChild.hass = hass;
+      if (this._overlayPlaylist) this._overlayPlaylist.hass = hass;
+      this._renderButton();
+      return;
+    }
     if (first && this._config) this._open(this._current.id, false);
   }
 
@@ -191,6 +238,87 @@ class LinnLibraryCard extends HTMLElement {
 
   disconnectedCallback() {
     document.removeEventListener("click", this._onOutside, true);
+    this._closeOverlay(false);
+  }
+
+  // ------------------------------------------------- button + fullscreen
+  _renderButton() {
+    const t = this._t;
+    const stateObj = this._hass?.states?.[this._config.entity];
+    let sub = "";
+    if (stateObj) {
+      const a = stateObj.attributes;
+      if (stateObj.state === "off") sub = t.off;
+      else if (a.media_title) sub = [a.media_title, a.media_artist].filter(Boolean).join(" · ");
+      else sub = t.idle;
+    }
+    const name = this._config.button_name || t.buttonName;
+    const icon = this._config.button_icon || "mdi:music-box-multiple";
+    const key = [name, icon, sub].join("|");
+    if (key === this._buttonKey && this.shadowRoot.querySelector(".launcher")) return;
+    this._buttonKey = key;
+    this.shadowRoot.innerHTML = `<style>${BUTTON_STYLE}</style>
+      <ha-card><div class="launcher" role="button" tabindex="0">
+        <div class="l-icon"><ha-icon icon="${esc(icon)}"></ha-icon></div>
+        <div class="l-text"><div class="l-name">${esc(name)}</div>${sub ? `<div class="l-sub">${esc(sub)}</div>` : ""}</div>
+        <ha-icon class="l-go" icon="mdi:arrow-expand"></ha-icon>
+      </div></ha-card>`;
+    const card = this.shadowRoot.querySelector(".launcher");
+    card.addEventListener("click", () => this._openOverlay());
+    card.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        this._openOverlay();
+      }
+    });
+  }
+
+  _overlayConfig() {
+    const { display, button_name, button_icon, playlist_panel, ...rest } = this._config;
+    return { ...rest, display: "inline", max_height: "none", _overlay: true };
+  }
+
+  _openOverlay() {
+    if (this._overlayHost || !this._config?.entity) return;
+    const host = document.createElement("div");
+    host.className = "linn-library-overlay";
+    const root = host.attachShadow({ mode: "open" });
+    const panel = this._config.playlist_panel !== false && customElements.get("linn-playlist-card");
+    root.innerHTML = `<style>${OVERLAY_STYLE}</style>
+      <div class="ov ${panel ? "with-panel" : ""}"><div class="main"></div>${panel ? `<div class="side"></div>` : ""}</div>`;
+
+    const lib = document.createElement("linn-library-card");
+    lib.setConfig(this._overlayConfig());
+    lib.hass = this._hass;
+    lib.addEventListener("linn-library-close", () => this._closeOverlay());
+    root.querySelector(".main").append(lib);
+    this._overlayChild = lib;
+
+    if (panel) {
+      const playlist = document.createElement("linn-playlist-card");
+      playlist.setConfig({ entity: this._config.entity, show_header: true, max_height: "none", _embedded: true });
+      playlist.hass = this._hass;
+      root.querySelector(".side").append(playlist);
+      this._overlayPlaylist = playlist;
+    }
+
+    this._bodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.body.append(host);
+    this._overlayHost = host;
+  }
+
+  _closeOverlay(animate = true) {
+    const host = this._overlayHost;
+    if (!host) return;
+    this._overlayHost = null;
+    this._overlayChild = null;
+    this._overlayPlaylist = null;
+    document.body.style.overflow = this._bodyOverflow || "";
+    const remove = () => host.remove();
+    if (!animate) return remove();
+    host.shadowRoot.querySelector(".ov")?.classList.add("closing");
+    setTimeout(remove, 180);
   }
 
   get _t() {
@@ -380,9 +508,9 @@ class LinnLibraryCard extends HTMLElement {
     if (!this._config.entity) body = `<div class="message">${esc(t.noEntity)}</div>`;
     else body = this._renderNav() + `<div class="scroll">${this._renderContent()}</div>`;
 
-    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${body}${this._renderMenu()}${
+    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="${this._config._overlay ? "full" : ""}"><div class="body">${body}${this._renderMenu()}${
       this._toast ? `<div class="toast ${this._toast.error ? "error" : ""}">${esc(this._toast.text)}</div>` : ""
-    }</ha-card>`;
+    }</div></ha-card>`;
 
     const scroll = this.shadowRoot.querySelector(".scroll");
     if (scroll) {
@@ -401,6 +529,9 @@ class LinnLibraryCard extends HTMLElement {
   _renderNav() {
     const t = this._t;
     const canBack = this._canBack;
+    const close = this._config._overlay
+      ? `<button class="icon" data-action="close" title="${esc(t.close)}"><ha-icon icon="mdi:close"></ha-icon></button>`
+      : "";
     if (this._searchOpen) {
       return `
         <div class="nav">
@@ -419,6 +550,7 @@ class LinnLibraryCard extends HTMLElement {
       .join(" › ");
     return `
       <div class="nav">
+        ${close}
         ${canBack ? `<button class="icon" data-action="back" title="${esc(t.back)}"><ha-icon icon="mdi:arrow-left"></ha-icon></button>` : `<span class="nav-pad"></span>`}
         <div class="nav-title">
           ${path ? `<div class="path">${esc(path)}</div>` : ""}
@@ -637,6 +769,9 @@ class LinnLibraryCard extends HTMLElement {
 
   _onAction(action, data, btn) {
     switch (action) {
+      case "close":
+        this.dispatchEvent(new CustomEvent("linn-library-close", { bubbles: true, composed: true }));
+        return;
       case "back":
         return this._back();
       case "home":
@@ -669,7 +804,19 @@ class LinnLibraryCard extends HTMLElement {
 
 const STYLE = `
   :host { display: block; }
-  ha-card { overflow: hidden; display: flex; flex-direction: column; height: 100%; position: relative; }
+  ha-card { overflow: hidden; height: 100%; position: relative; }
+  .body { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  ha-card.full { border-radius: 0; box-shadow: none; border: none; }
+  .full .nav { min-height: 60px; padding: 8px 12px; padding-top: calc(8px + env(safe-area-inset-top, 0px)); }
+  .full .nav-title .name { font-size: 1.2em; }
+  .full .grid { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 20px 16px; padding: 16px 20px 24px; }
+  .full .hero { padding: 20px; }
+  .full .hero-art { width: 160px; height: 160px; }
+  .full .hero-title { font-size: 1.5em; }
+  @media (max-width: 600px) {
+    .full .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); padding: 12px; gap: 14px 12px; }
+    .full .hero-art { width: 112px; height: 112px; }
+  }
   button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
   button:disabled { opacity: 0.35; cursor: default; }
   .icon { width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
@@ -745,6 +892,32 @@ const STYLE = `
   .spin { animation: spin 1s linear infinite; color: var(--secondary-text-color); }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+`;
+
+const BUTTON_STYLE = `
+  :host { display: block; height: 100%; }
+  ha-card { height: 100%; overflow: hidden; }
+  .launcher { display: flex; align-items: center; gap: 12px; padding: 0 12px; height: 100%; min-height: 56px;
+              box-sizing: border-box; cursor: pointer; transition: background 0.15s; outline: none; }
+  .launcher:hover, .launcher:focus-visible { background: rgba(127,127,127,0.08); }
+  .l-icon { width: 36px; height: 36px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+            background: rgba(var(--rgb-primary-color, 3,169,244), 0.2); color: var(--primary-color); --mdc-icon-size: 22px; }
+  .l-text { flex: 1; min-width: 0; }
+  .l-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l-sub { font-size: 0.85em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l-go { color: var(--secondary-text-color); --mdc-icon-size: 20px; flex: none; }
+`;
+
+const OVERLAY_STYLE = `
+  .ov { position: fixed; inset: 0; z-index: 1000; display: flex; background: var(--primary-background-color, #fafafa);
+        animation: ov-in 0.2s ease-out; padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  .ov.closing { animation: ov-out 0.18s ease-in forwards; }
+  .main { flex: 1; min-width: 0; display: flex; }
+  .main > *, .side > * { flex: 1; min-width: 0; height: 100%; }
+  .side { width: 420px; flex: none; display: flex; border-left: 1px solid var(--divider-color); }
+  @media (max-width: 999px) { .side { display: none; } }
+  @keyframes ov-in { from { opacity: 0; transform: translateY(24px); } }
+  @keyframes ov-out { to { opacity: 0; transform: translateY(24px); } }
 `;
 
 if (!customElements.get("linn-library-card")) {
