@@ -682,6 +682,14 @@ class FakeUpnp:
         if BrowseFlag == "BrowseMetadata":
             if self.metadata_quirk == "error":
                 raise SoapFault(701, "No such object")
+            if self.metadata_quirk == "id_title":  # like upmpdcli plugins: id as title
+                result = (
+                    f'{DIDL_OPEN}<container id="{escape(ObjectID)}" restricted="1">'
+                    f"<dc:title>{escape(ObjectID)}</dc:title>"
+                    "<upnp:class>object.container</upnp:class></container></DIDL-Lite>"
+                )
+                return {"Result": result, "NumberReturned": 1, "TotalMatches": 1,
+                        "UpdateID": 1}
             if self.metadata_quirk == "no_res":
                 obj = lib.objects[ObjectID]
                 result = (

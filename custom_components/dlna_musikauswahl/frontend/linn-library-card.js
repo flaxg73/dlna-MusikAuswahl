@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.6.4";
+const CARD_VERSION = "0.6.5";
 
 const STRINGS = {
   de: {
@@ -492,7 +492,8 @@ class LinnLibraryCard extends HTMLElement {
       this._page = page;
       this._items = page.children;
       this._nextStart = page.next_start;
-      this._current.title = page.title;
+      // the title from the listing (clicked entry) wins over an empty page title
+      this._current.title = page.title || this._current.title;
       this._error = null;
       // hints like "Qobuz not configured" are not cached: the setup may change
       if (!page.message) this._cache.set(id ?? "", { page, items: this._items, nextStart: this._nextStart });
@@ -777,7 +778,7 @@ class LinnLibraryCard extends HTMLElement {
       <div class="hero">
         ${cover}
         <div class="hero-text">
-          <div class="hero-title">${esc(p.title)}</div>
+          <div class="hero-title">${esc(p.title || this._current.title || "")}</div>
           ${p.subtitle ? `<div class="hero-sub">${esc(p.subtitle)}</div>` : ""}
           <div class="hero-info">${esc(info.join(" · "))}</div>
           <div class="hero-actions">

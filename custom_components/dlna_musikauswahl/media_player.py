@@ -771,7 +771,8 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             container_class = MediaClass.DIRECTORY
             thumbnail = None
         else:
-            title, container_class, thumbnail = object_id, MediaClass.DIRECTORY, None
+            title = server.title_for(object_id) or object_id
+            container_class, thumbnail = MediaClass.DIRECTORY, None
             try:
                 meta = await server.async_metadata(object_id)
             except (*CONNECT_ERRORS, AssertionError, IndexError) as err:
@@ -779,7 +780,7 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                 _LOGGER.debug("BrowseMetadata of %s failed: %s", object_id, err)
                 meta = None
             if meta is not None:
-                title = str(getattr(meta, "title", None) or object_id)
+                title = server.title_for(object_id, getattr(meta, "title", None)) or object_id
                 if is_container(meta):
                     container_class = media_class_for(meta)
             if meta is not None and (art := server.absolute_url(album_art_uri(meta))):
@@ -965,13 +966,13 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                     _LOGGER.debug("BrowseMetadata of %s failed: %s", object_id, err)
                     meta = None
                 if meta is not None:
-                    title = str(getattr(meta, "title", None) or object_id)
+                    title = server.title_for(object_id, getattr(meta, "title", None))
                     subtitle = getattr(meta, "artist", None) or getattr(meta, "creator", None)
                     image = self._art_url(server.absolute_url(album_art_uri(meta)))
                     if is_container(meta):
                         kind = str(media_class_for(meta))
                 else:
-                    title = object_id
+                    title = server.title_for(object_id)
             page = await server.async_browse(object_id, start, LIBRARY_PAGE_SIZE)
         except CONNECT_ERRORS as err:
             raise HomeAssistantError(f"Media server {server.name} not reachable: {err}") from err
@@ -1051,8 +1052,11 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             qobuz = [
                 c for c in page["children"] if c["container"] and "qobuz" in c["title"].lower()
             ]
-            if len(qobuz) == 1 and len(page["children"]) > 1:
+            only = page["children"][0] if len(page["children"]) == 1 else None
+            if len(qobuz) == 1:
                 page = await self.async_library_browse(qobuz[0]["id"])
+            elif only is not None and only["container"]:
+                page = await self.async_library_browse(only["id"])
         page["title"] = "Qobuz"
         page["can_play"] = False
         page["root"] = True

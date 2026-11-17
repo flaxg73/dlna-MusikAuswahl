@@ -798,3 +798,21 @@ async def test_options_mark_offline_server(hass: HomeAssistant, fake: FakeUpnp) 
     )
     await hass.async_block_till_done()
     assert [s["udn"] for s in entry.options[CONF_SERVERS]] == [SERVER_UDN]
+
+
+
+@pytest.mark.parametrize("quirk", ["id_title", "error"])
+async def test_readable_titles(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client, quirk) -> None:
+    """Folder titles come from the listing when BrowseMetadata has no usable title."""
+    await _setup(hass, fake)
+    fake.metadata_quirk = quirk
+    ws = await _ws_client(hass, hass_ws_client)
+    server = (await ws("browse", media_content_id=_cid("0")))["result"]
+    albums = (await ws("browse", media_content_id=server["children"][0]["id"]))["result"]
+    assert albums["title"] == "Alben"
+    album = (await ws("browse", media_content_id=albums["children"][0]["id"]))["result"]
+    assert album["title"] == "Album 1"
+    # HA media browser as well
+    entity = _entity(hass)
+    page = await entity.async_browse_media("playlist", _cid("albums"))
+    assert page.title == "Alben"
