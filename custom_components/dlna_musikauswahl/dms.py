@@ -8,12 +8,22 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from async_upnp_client.exceptions import UpnpActionError, UpnpActionResponseError
+from async_upnp_client.exceptions import (
+    UpnpActionError,
+    UpnpActionResponseError,
+    UpnpError,
+)
 from async_upnp_client.profiles.dlna import DmsDevice
 from didl_lite import didl_lite
 from homeassistant.core import HomeAssistant
 
-from .const import MAX_RECURSION_DEPTH, SERVER_LOCATION, SERVER_NAME, SERVER_UDN
+from .const import (
+    MAX_RECURSION_DEPTH,
+    SERVER_LOCATION,
+    SERVER_NAME,
+    SERVER_UDN,
+    ST_MEDIA_SERVERS,
+)
 from .didl import (
     describe,
     is_container,
@@ -22,7 +32,7 @@ from .didl import (
     pick_audio_resource,
 )
 from .openhome import PlaylistTrack
-from .upnp import CONNECT_ERRORS, async_connect
+from .upnp import CONNECT_ERRORS, async_connect, async_find_by_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,7 +73,25 @@ class MediaServer:
     async def _async_device(self) -> DmsDevice:
         async with self._lock:
             if self._device is None:
-                upnp_device, location = await async_connect(self.hass, self.location, self.udn)
+                try:
+                    upnp_device, location = await async_connect(
+                        self.hass, self.location, self.udn
+                    )
+                except UpnpError:
+                    found = await async_find_by_name(
+                        self.hass, self.name, self.location, ST_MEDIA_SERVERS
+                    )
+                    if found is None:
+                        raise
+                    upnp_device, location = found
+                    _LOGGER.warning(
+                        "Media server %s now answers with device id %s instead of %s "
+                        "(e.g. after recreating its container); using it. Select the new "
+                        "entry in the integration options to make this permanent",
+                        self.name,
+                        upnp_device.udn,
+                        self.udn,
+                    )
                 self.location = location
                 self._device = DmsDevice(upnp_device, None)
                 self.name = self._device.name or self.name

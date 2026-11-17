@@ -15,7 +15,7 @@ CONF_QOBUZ_SERVER: Final = "qobuz_server"
 CONF_TUNEIN_USERNAME: Final = "tunein_username"
 QOBUZ_NONE: Final = "none"
 QOBUZ_AUTO: Final = "auto"
-QOBUZ_NAME_HINTS: Final = ("qobuz", "upmpd", "bubbleupnp")
+QOBUZ_NAME_HINTS: Final = ("qobuz", "quobuz", "upmpd", "bubbleupnp")
 
 # keys inside a stored server dict
 SERVER_UDN: Final = "udn"
@@ -54,6 +54,6 @@ SERVICE_MOVE_TRACK: Final = "move_track"
 
 FRONTEND_URL: Final = "/dlna_musikauswahl"
 CARDS: Final = ("linn-playlist-card.js", "linn-library-card.js")
-CARD_VERSION: Final = "0.6.3"
+CARD_VERSION: Final = "0.6.4"
 ATTR_MODE: Final = "mode"
 ATTR_PLAY: Final = "play"

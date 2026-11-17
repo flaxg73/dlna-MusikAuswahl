@@ -88,13 +88,22 @@ async def _async_validate_server(hass: HomeAssistant, url: str) -> dict[str, str
     raise OpenHomeError("not a media server")
 
 
+OFFLINE = " – nicht erreichbar / offline"
+
+
+def _server_label(cfg: dict[str, str], offline: bool) -> str:
+    return f"{cfg[SERVER_NAME]} ({cfg[SERVER_LOCATION]})" + (OFFLINE if offline else "")
+
+
 def _servers_schema(
     discovered: dict[str, dict[str, str]],
     selected: list[str],
     max_tracks: int | None = None,
+    offline: set[str] | None = None,
 ) -> vol.Schema:
+    offline = offline or set()
     options = [
-        SelectOptionDict(value=udn, label=f"{cfg[SERVER_NAME]} ({cfg[SERVER_LOCATION]})")
+        SelectOptionDict(value=udn, label=_server_label(cfg, udn in offline))
         for udn, cfg in discovered.items()
     ]
     schema: dict[Any, Any] = {}
@@ -297,6 +306,7 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
     def __init__(self) -> None:
         """Initialise."""
         self._discovered: dict[str, dict[str, str]] = {}
+        self._offline: set[str] = set()
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -321,7 +331,8 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
             if (
                 qobuz not in (None, QOBUZ_AUTO, QOBUZ_NONE)
                 and all(srv[SERVER_UDN] != qobuz for srv in servers)
-                and (cfg := self._discovered.get(qobuz) or known.get(qobuz))
+                and qobuz not in self._offline
+                and (cfg := self._discovered.get(qobuz))
             ):
                 servers.append(cfg)
                 errors.pop("base", None)
@@ -342,17 +353,22 @@ class DlnaMusikauswahlOptionsFlow(OptionsFlow):
             discovered = await _async_discovered_servers(self.hass)
             # keep configured servers selectable even if currently offline
             self._discovered = {**known, **discovered}
+            self._offline = {udn for udn in known if udn not in discovered}
 
         schema = _servers_schema(
             self._discovered,
             list(known),
             int(entry.options.get(CONF_MAX_TRACKS, DEFAULT_MAX_TRACKS)),
+            self._offline,
         )
         qobuz_options = [
             SelectOptionDict(value=QOBUZ_AUTO, label="Automatisch erkennen / auto-detect"),
             SelectOptionDict(value=QOBUZ_NONE, label="Kein Qobuz / no Qobuz"),
         ] + [
-            SelectOptionDict(value=udn, label=cfg[SERVER_NAME])
+            SelectOptionDict(
+                value=udn,
+                label=cfg[SERVER_NAME] + (OFFLINE if udn in self._offline else ""),
+            )
             for udn, cfg in self._discovered.items()
         ]
         schema = schema.extend(

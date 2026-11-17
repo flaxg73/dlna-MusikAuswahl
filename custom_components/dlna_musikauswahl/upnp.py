@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlparse
 
 import aiohttp
 from async_upnp_client.aiohttp import AiohttpSessionRequester
@@ -38,6 +39,32 @@ async def async_locations_for_udn(hass: HomeAssistant, udn: str) -> list[str]:
         if info.ssdp_location and info.ssdp_location not in locations:
             locations.append(info.ssdp_location)
     return locations
+
+
+async def async_find_by_name(
+    hass: HomeAssistant, name: str, near: str | None, device_types: tuple[str, ...]
+) -> tuple[UpnpDevice, str] | None:
+    """Find a device announced via SSDP under the same friendly name.
+
+    Used when a device got a new UDN, e.g. a recreated container: servers
+    like upmpdcli derive their UDN from the MAC address of the container.
+    Devices on the same host as before are preferred.
+    """
+    wanted = name.strip().lower()
+    old_host = urlparse(near).hostname if near else None
+    candidates: list[str] = []
+    for device_type in device_types:
+        for info in await ssdp.async_get_discovery_info_by_st(hass, device_type):
+            friendly = str(info.upnp.get("friendlyName") or "").strip().lower()
+            if friendly == wanted and info.ssdp_location and info.ssdp_location not in candidates:
+                candidates.append(info.ssdp_location)
+    candidates.sort(key=lambda loc: urlparse(loc).hostname != old_host)
+    for location in candidates:
+        try:
+            return await async_create_device(hass, location), location
+        except CONNECT_ERRORS as err:
+            _LOGGER.debug("Cannot connect to %s: %s", location, err)
+    return None
 
 
 async def async_connect(
