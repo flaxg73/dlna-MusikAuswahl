@@ -40,6 +40,7 @@ from .const import (
 )
 from .dms import MediaServer
 from .openhome import OpenHomeError, OpenHomeRenderer
+from .saved import SavedPlaylists
 from .upnp import CONNECT_ERRORS, async_connect
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,6 +58,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, ws_browse)
     websocket_api.async_register_command(hass, ws_search)
     websocket_api.async_register_command(hass, ws_load)
+    websocket_api.async_register_command(hass, ws_saved_playlists)
+    websocket_api.async_register_command(hass, ws_radio_favorites)
     await _async_register_card(hass)
     return True
 
@@ -169,9 +172,45 @@ async def ws_load(
     if entity := _ws_entity(hass, connection, msg, POLICY_CONTROL):
 
         async def _load() -> dict[str, int]:
-            return {"count": await entity.async_load(msg["media_content_id"], msg["mode"])}
+            content_id = msg["media_content_id"]
+            if content_id.startswith("saved:"):
+                count = await entity.async_load_saved(content_id[len("saved:") :], msg["mode"])
+            else:
+                count = await entity.async_load(content_id, msg["mode"])
+            return {"count": count}
 
         await _ws_run(connection, msg["id"], _load())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "dlna_musikauswahl/saved_playlists",
+        vol.Required("entity_id"): cv.entity_id,
+    }
+)
+@websocket_api.async_response
+async def ws_saved_playlists(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """List the playlists saved for a Linn player."""
+    if entity := _ws_entity(hass, connection, msg):
+        connection.send_result(msg["id"], {"playlists": entity.saved_playlists()})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "dlna_musikauswahl/radio_favorites",
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Optional("limit", default=12): vol.All(int, vol.Range(min=1, max=100)),
+    }
+)
+@websocket_api.async_response
+async def ws_radio_favorites(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """First TuneIn favourites (player card)."""
+    if entity := _ws_entity(hass, connection, msg):
+        await _ws_run(connection, msg["id"], entity.async_radio_favorites(msg["limit"]))
 
 
 @websocket_api.websocket_command(
@@ -210,6 +249,7 @@ class RuntimeData:
     max_tracks: int = DEFAULT_MAX_TRACKS
     qobuz_udn: str | None = None
     tunein_username: str | None = None
+    saved: SavedPlaylists | None = None
 
 
 def qobuz_server_udn(option: str | None, servers: list[dict[str, str]]) -> str | None:
@@ -260,7 +300,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: MusikConfigEntry) -> boo
     servers = {
         cfg["udn"]: MediaServer(hass, cfg) for cfg in _servers_config(entry) if cfg.get("udn")
     }
+    saved = SavedPlaylists(hass, entry.entry_id)
+    await saved.async_load()
     entry.runtime_data = RuntimeData(
+        saved=saved,
         renderer=renderer,
         servers=servers,
         max_tracks=int(entry.options.get(CONF_MAX_TRACKS, DEFAULT_MAX_TRACKS)),
@@ -277,6 +320,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: MusikConfigEntry) -> boo
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the saved playlists when the integration is removed."""
+    await SavedPlaylists(hass, entry.entry_id).async_remove()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: MusikConfigEntry) -> bool:

@@ -84,6 +84,48 @@ Integration einfach mehrfach ein.
 
 ## Benutzung
 
+### Player-Karte (alles in einer Karte)
+
+```yaml
+type: custom:linn-player-card
+entity: media_player.wohnzimmer
+radio_count: 8            # Anzahl TuneIn-Favoriten (0 = ausblenden)
+show_library_button: true # Button zur Vollbild-Musikauswahl
+show_playlist: true
+playlist_height: 360px
+sources: [server, qobuz, radio]   # optional, für die Musikauswahl
+```
+
+Von oben nach unten:
+- **Player:** Cover und aktueller Titel, Ein/Aus, Quellenwahl, Zurück / Play-Pause / Vor,
+  Lautstärke-Regler mit −/+ und Stumm.
+- **Radio-Favoriten:** die ersten TuneIn-Favoriten als kleine Sender-Kacheln. Ein Tipp spielt
+  den Sender auf der Radio-Quelle des Linn, der laufende Sender ist markiert. Dafür muss in den
+  Optionen der TuneIn-Benutzername eingetragen sein.
+- **„Musik auswählen“:** öffnet die Musikauswahl im Vollbild (Musik-Server, Qobuz, Radio).
+  Zurück geht es mit ✕.
+- **Playlist** des Linn mit dem laufenden Titel, inklusive Speichern und Laden (siehe unten).
+
+### Playlists speichern und laden
+
+Der Linn hält nur eine Playlist. Mit 💾 in der Playlist-Anzeige (Player- und Playlist-Karte)
+speicherst du die aktuelle Playlist unter einem Namen. Mit ★ öffnest du die gespeicherten
+Playlists: ▶ lädt eine Playlist (ersetzt die aktuelle und startet sie), + hängt sie hinten an,
+🗑 löscht sie.
+
+Die Playlists liegen in Home Assistant (`.storage/dlna_musikauswahl.playlists.*`) und sind
+damit auch im Backup enthalten. Für Automationen gibt es die Dienste:
+
+```yaml
+action: dlna_musikauswahl.load_playlist
+target: { entity_id: media_player.wohnzimmer }
+data: { name: Sonntagmorgen, mode: replace }   # außerdem: save_playlist, delete_playlist
+```
+
+Tipp: Liegen die Titel auf deinem Musikserver, bleiben gespeicherte Playlists gültig, solange
+sich die Adressen der Dateien nicht ändern. Qobuz-Titel laufen über den Brückenserver und
+brauchen ihn beim Abspielen.
+
 ### Playlist-Karte
 
 Die Karte wird automatisch mitgeladen, du musst keine Ressource von Hand eintragen. Im

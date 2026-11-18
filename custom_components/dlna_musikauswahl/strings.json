@@ -115,6 +115,44 @@
           "description": "New position (1 = top)."
         }
       }
+    },
+    "save_playlist": {
+      "name": "Save playlist",
+      "description": "Saves the current Linn playlist under a name in Home Assistant.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Name of the playlist. An existing playlist with this name is overwritten."
+        }
+      }
+    },
+    "load_playlist": {
+      "name": "Load playlist",
+      "description": "Loads a saved playlist into the Linn.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Name of the saved playlist."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Replace, append, play next or play now."
+        },
+        "play": {
+          "name": "Start playback",
+          "description": "Start playback after loading (default: for replace and play)."
+        }
+      }
+    },
+    "delete_playlist": {
+      "name": "Delete saved playlist",
+      "description": "Deletes a saved playlist.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Name of the saved playlist."
+        }
+      }
     }
   },
   "selector": {
