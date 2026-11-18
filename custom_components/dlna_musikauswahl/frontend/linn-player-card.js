@@ -15,8 +15,11 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.7.0";
+const CARD_VERSION = "0.7.1";
 const FAVORITES_REFRESH = 10 * 60 * 1000;
+const MEDIUM = 480; // px width of the player area: controls side by side
+const ROOMY = 640; // bigger cover and buttons
+const TWO_COLUMNS = 820; // px card width: playlist in a second column
 
 const STRINGS = {
   de: {
@@ -132,7 +135,7 @@ class LinnPlayerCard extends HTMLElement {
   }
 
   getGridOptions() {
-    return { columns: 12, min_columns: 6, rows: "auto" };
+    return { columns: "full", min_columns: 6, rows: "auto" };
   }
 
   set hass(hass) {
@@ -149,7 +152,12 @@ class LinnPlayerCard extends HTMLElement {
     }
   }
 
+  connectedCallback() {
+    if (this._built) this._observeSize();
+  }
+
   disconnectedCallback() {
+    this._resizeObserver?.disconnect();
     // leaving the dashboard closes the fullscreen selection
     this._library?._closeOverlay?.(false);
   }
@@ -173,39 +181,41 @@ class LinnPlayerCard extends HTMLElement {
     }
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
       <ha-card>
-        <div class="player">
-          <div class="now">
-            <div class="art"></div>
-            <div class="now-text"><div class="title"></div><div class="sub"></div></div>
-            <button class="icon power" data-action="power" title="${esc(t.power)}"><ha-icon icon="mdi:power"></ha-icon></button>
+        <div class="layout">
+          <div class="left">
+            <div class="player">
+              <div class="art"></div>
+              <div class="now-text"><div class="title"></div><div class="sub"></div></div>
+              <button class="icon power" data-action="power" title="${esc(t.power)}"><ha-icon icon="mdi:power"></ha-icon></button>
+              <div class="source-row">
+                <ha-icon class="source-icon" icon="mdi:import"></ha-icon>
+                <select class="source" title="${esc(t.source)}"></select>
+              </div>
+              <div class="transport">
+                <button class="icon" data-action="prev" title="${esc(t.prev)}"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
+                <button class="icon play" data-action="playpause" title="${esc(t.playPause)}"><ha-icon icon="mdi:play"></ha-icon></button>
+                <button class="icon" data-action="next" title="${esc(t.next)}"><ha-icon icon="mdi:skip-next"></ha-icon></button>
+              </div>
+              <div class="volume">
+                <button class="icon small mute" data-action="mute" title="${esc(t.mute)}"><ha-icon icon="mdi:volume-high"></ha-icon></button>
+                <button class="icon small" data-action="voldown" title="${esc(t.volDown)}"><ha-icon icon="mdi:minus"></ha-icon></button>
+                <input class="slider" type="range" min="0" max="100" step="1" value="0">
+                <button class="icon small" data-action="volup" title="${esc(t.volUp)}"><ha-icon icon="mdi:plus"></ha-icon></button>
+                <span class="vol-value">–</span>
+              </div>
+            </div>
+            <div class="section radio">
+              <div class="section-head"><ha-icon icon="mdi:radio"></ha-icon><span>${esc(t.radio)}</span></div>
+              <div class="stations"></div>
+            </div>
+            <button class="library" data-action="library">
+              <ha-icon icon="mdi:music-box-multiple"></ha-icon>
+              <span class="lib-text"><span class="lib-name">${esc(t.library)}</span><span class="lib-hint">${esc(t.libraryHint)}</span></span>
+              <ha-icon class="lib-go" icon="mdi:arrow-expand"></ha-icon>
+            </button>
           </div>
-          <div class="source-row">
-            <ha-icon class="source-icon" icon="mdi:import"></ha-icon>
-            <select class="source" title="${esc(t.source)}"></select>
-          </div>
-          <div class="transport">
-            <button class="icon" data-action="prev" title="${esc(t.prev)}"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
-            <button class="icon play" data-action="playpause" title="${esc(t.playPause)}"><ha-icon icon="mdi:play"></ha-icon></button>
-            <button class="icon" data-action="next" title="${esc(t.next)}"><ha-icon icon="mdi:skip-next"></ha-icon></button>
-          </div>
-          <div class="volume">
-            <button class="icon small mute" data-action="mute" title="${esc(t.mute)}"><ha-icon icon="mdi:volume-high"></ha-icon></button>
-            <button class="icon small" data-action="voldown" title="${esc(t.volDown)}"><ha-icon icon="mdi:minus"></ha-icon></button>
-            <input class="slider" type="range" min="0" max="100" step="1" value="0">
-            <button class="icon small" data-action="volup" title="${esc(t.volUp)}"><ha-icon icon="mdi:plus"></ha-icon></button>
-            <span class="vol-value">–</span>
-          </div>
+          <div class="right playlist-slot"></div>
         </div>
-        <div class="section radio">
-          <div class="section-head"><ha-icon icon="mdi:radio"></ha-icon><span>${esc(t.radio)}</span></div>
-          <div class="stations"></div>
-        </div>
-        <button class="library" data-action="library">
-          <ha-icon icon="mdi:music-box-multiple"></ha-icon>
-          <span class="lib-text"><span class="lib-name">${esc(t.library)}</span><span class="lib-hint">${esc(t.libraryHint)}</span></span>
-          <ha-icon class="lib-go" icon="mdi:arrow-expand"></ha-icon>
-        </button>
-        <div class="playlist-slot"></div>
         <div class="toast" hidden></div>
       </ha-card>`;
 
@@ -262,7 +272,52 @@ class LinnPlayerCard extends HTMLElement {
     }
     this._built = true;
     this._lastKey = null;
+    this._layout = false; // the playlist was created for the single column
     this._renderStations();
+    this._observeSize();
+  }
+
+  // ---------------------------------------------------------- layout
+  /* The layout follows the width of the card itself (a card can be narrow on a
+     PC, too): "narrow" stacked (phone), "medium" with controls side by side,
+     "two" with the playlist in a second column (tablet landscape, PC). */
+  _observeSize() {
+    this._resizeObserver?.disconnect();
+    const card = this.shadowRoot.querySelector("ha-card");
+    if (!card || !("ResizeObserver" in window)) return;
+    this._resizeObserver = new ResizeObserver(() => this._applyLayout());
+    this._resizeObserver.observe(card);
+    const left = this.shadowRoot.querySelector(".left");
+    if (left) this._resizeObserver.observe(left);
+  }
+
+  _applyLayout() {
+    const card = this.shadowRoot.querySelector("ha-card");
+    const left = this.shadowRoot.querySelector(".left");
+    if (!card || !left) return;
+    const width = card.clientWidth;
+    if (!width) return;
+    const two = !!this._playlist && width >= TWO_COLUMNS;
+    card.classList.toggle("two", two);
+    // the player area itself decides between stacked and side by side
+    const playerWidth = two ? left.clientWidth : width;
+    card.classList.toggle("medium", playerWidth >= MEDIUM);
+    card.classList.toggle("roomy", playerWidth >= ROOMY);
+    if (two !== this._layout) {
+      this._layout = two;
+      if (this._playlist) {
+        this._playlist.setConfig({
+          entity: this._config.entity,
+          show_header: false,
+          max_height: two ? "none" : this._config.playlist_height,
+          _embedded: true,
+        });
+        if (this._hass) this._playlist.hass = this._hass;
+      }
+    }
+    // second column: as high as the left one, the list scrolls inside
+    const right = this.shadowRoot.querySelector(".right");
+    if (right) right.style.height = two ? `${Math.max(left.offsetHeight, 420)}px` : "";
   }
 
   // ------------------------------------------------------------ update
@@ -455,20 +510,37 @@ const STYLE = `
   .icon:not(:disabled):hover { background: rgba(127,127,127,0.15); }
   .icon.small { width: 34px; height: 34px; --mdc-icon-size: 20px; }
   .icon.active { color: var(--primary-color); }
-  .player { padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 8px; }
-  .now { display: flex; align-items: center; gap: 12px; }
+  /* ---- player: CSS grid, arranged by the width classes ---- */
+  .player { padding: 14px 14px 8px; display: grid; gap: 8px 12px; align-items: center;
+            grid-template-columns: 64px minmax(0, 1fr) auto;
+            grid-template-areas: "art text power" "source source source" "transport transport transport" "volume volume volume"; }
+  .art { grid-area: art; }
+  .now-text { grid-area: text; min-width: 0; }
+  .power { grid-area: power; }
+  .source-row { grid-area: source; }
+  .transport { grid-area: transport; }
+  .volume { grid-area: volume; }
+  .medium .player { grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1fr) auto;
+                    grid-template-areas: "art text text power" "transport transport volume volume" "source source source source";
+                    row-gap: 12px; }
+  .medium .transport { justify-content: flex-start; gap: 10px; }
+  .roomy .player { grid-template-columns: 96px minmax(0, 1fr) minmax(170px, 240px) auto;
+                   grid-template-areas: "art text source power" "art transport volume volume"; }
+  .roomy .source-icon { display: none; }
+  .roomy .art { width: 96px; height: 96px; }
+  .roomy .title { font-size: 1.3em; }
   .art { width: 64px; height: 64px; border-radius: 8px; background: center / cover no-repeat; flex: none;
          box-shadow: 0 1px 4px rgba(0,0,0,0.3); --mdc-icon-size: 30px; }
+  .medium .art { width: 72px; height: 72px; }
   .art.placeholder { display: flex; align-items: center; justify-content: center; box-shadow: none;
                      background-color: var(--secondary-background-color, rgba(127,127,127,0.15)); color: var(--secondary-text-color); }
-  .now-text { flex: 1; min-width: 0; }
   .title { font-size: 1.1em; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sub { color: var(--secondary-text-color); font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .power { --mdc-icon-size: 24px; }
   .power.on { color: var(--primary-color); background: rgba(var(--rgb-primary-color, 3,169,244), 0.14); }
-  .source-row { display: flex; align-items: center; gap: 8px; }
+  .source-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .source-icon { color: var(--secondary-text-color); --mdc-icon-size: 20px; margin-left: 10px; }
-  .source { flex: 1; height: 36px; border-radius: 18px; border: 1px solid var(--divider-color); padding: 0 12px;
+  .source { flex: 1; min-width: 0; height: 36px; border-radius: 18px; border: 1px solid var(--divider-color); padding: 0 12px;
             font: inherit; color: var(--primary-text-color); background: var(--card-background-color, #fff); outline: none; }
   .source:focus { border-color: var(--primary-color); }
   .transport { display: flex; align-items: center; justify-content: center; gap: 18px; }
@@ -476,6 +548,17 @@ const STYLE = `
   .transport .play { width: 60px; height: 60px; --mdc-icon-size: 36px; background: var(--primary-color);
                      color: var(--text-primary-color, #fff); box-shadow: 0 2px 6px rgba(0,0,0,0.25); }
   .transport .play:not(:disabled):hover { background: var(--primary-color); filter: brightness(1.08); }
+  /* ---- two columns: player | playlist ---- */
+  .layout { display: block; }
+  .two .layout { display: grid; grid-template-columns: minmax(360px, 5fr) minmax(380px, 6fr); align-items: start; }
+  .two .right { border-top: none; border-left: 1px solid var(--divider-color); display: flex; min-height: 0; overflow: hidden; }
+  .two .right > * { flex: 1; min-width: 0; height: 100%; }
+  .two .player { padding-top: 18px; }
+  .two .library { margin-bottom: 16px; }
+  /* station tiles wrap instead of scrolling sideways when there is room */
+  .medium .stations, .two .stations { flex-wrap: wrap; overflow: visible; }
+  .medium .station { width: 76px; }
+  .medium .logo { width: 54px; height: 54px; }
   .volume { display: flex; align-items: center; gap: 4px; }
   .slider { flex: 1; min-width: 60px; -webkit-appearance: none; appearance: none; height: 6px; border-radius: 3px; outline: none;
             background: linear-gradient(to right, var(--primary-color) var(--value, 0%), var(--divider-color) var(--value, 0%)); }
@@ -497,7 +580,7 @@ const STYLE = `
   .station.active .logo { box-shadow: 0 0 0 2px var(--primary-color); }
   .station.active .st-name { color: var(--primary-color); font-weight: 500; }
   .st-name { font-size: 0.75em; line-height: 1.2; width: 100%; text-align: center; overflow: hidden; display: -webkit-box;
-             -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+             -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: break-word; hyphens: auto; }
   .hint { padding: 0 16px 6px; color: var(--secondary-text-color); font-size: 0.85em; }
   .library { display: flex; align-items: center; gap: 12px; width: calc(100% - 28px); margin: 6px 14px 12px; padding: 10px 14px;
              border-radius: 14px; background: var(--primary-color); color: var(--text-primary-color, #fff); text-align: left;
@@ -508,6 +591,7 @@ const STYLE = `
   .lib-hint { font-size: 0.8em; opacity: 0.85; }
   .lib-go { --mdc-icon-size: 20px; opacity: 0.85; }
   .playlist-slot { border-top: 1px solid var(--divider-color); }
+  @media (max-width: 360px) { .transport { gap: 8px; } .volume .vol-value { display: none; } }
   .message { padding: 24px 16px; text-align: center; color: var(--secondary-text-color); }
   .toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100% - 32px);
            background: var(--primary-text-color); color: var(--card-background-color, #fff); padding: 9px 16px;

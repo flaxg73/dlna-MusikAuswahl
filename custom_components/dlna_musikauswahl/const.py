@@ -57,6 +57,6 @@ SERVICE_DELETE_PLAYLIST: Final = "delete_playlist"
 
 FRONTEND_URL: Final = "/dlna_musikauswahl"
 CARDS: Final = ("linn-playlist-card.js", "linn-library-card.js", "linn-player-card.js")
-CARD_VERSION: Final = "0.7.0"
+CARD_VERSION: Final = "0.7.1"
 ATTR_MODE: Final = "mode"
 ATTR_PLAY: Final = "play"

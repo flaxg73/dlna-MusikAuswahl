@@ -106,6 +106,15 @@ Von oben nach unten:
   Zurück geht es mit ✕.
 - **Playlist** des Linn mit dem laufenden Titel, inklusive Speichern und Laden (siehe unten).
 
+Die Karte passt sich ihrer Breite an:
+- **schmal** (Handy): alles untereinander, die Senderkacheln lassen sich seitlich wischen
+- **mittel** (Tablet hochkant): Wiedergabe-Knöpfe und Lautstärke nebeneinander, Sender in Reihen
+- **breit** (Tablet quer, PC): zwei Spalten. Links Player, Sender und Musikauswahl, rechts die
+  Playlist in gleicher Höhe.
+
+In einer Ansicht vom Typ „Abschnitte“ nimmt die Karte standardmäßig die volle Breite ein. Du
+kannst sie dort auch schmaler ziehen, die Anordnung folgt automatisch.
+
 ### Playlists speichern und laden
 
 Der Linn hält nur eine Playlist. Mit 💾 in der Playlist-Anzeige (Player- und Playlist-Karte)
