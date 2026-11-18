@@ -25,6 +25,7 @@ from .const import (
     ST_MEDIA_SERVERS,
 )
 from .didl import (
+    album_art_uri,
     describe,
     is_container,
     is_playable_audio_item,
@@ -67,6 +68,8 @@ class MediaServer:
         # titles seen in listings: some servers (e.g. upmpdcli plugins) answer
         # BrowseMetadata without a usable title, the listing has the real one
         self._titles: dict[str, str] = {}
+        # cover, artist and class seen in listings (BrowseMetadata may lack them)
+        self._details: dict[str, tuple[str | None, str | None, str]] = {}
         self._lock = asyncio.Lock()
 
     @property
@@ -145,11 +148,24 @@ class MediaServer:
 
     def _remember_titles(self, objects: list[didl_lite.DidlObject]) -> None:
         for obj in objects:
+            if not obj.id:
+                continue
             title = getattr(obj, "title", None)
-            if obj.id and title and title != obj.id:
+            if title and title != obj.id:
                 self._titles[obj.id] = str(title)
-        while len(self._titles) > TITLE_CACHE_SIZE:
-            self._titles.pop(next(iter(self._titles)))
+            artist = getattr(obj, "artist", None) or getattr(obj, "creator", None)
+            self._details[obj.id] = (
+                self.absolute_url(album_art_uri(obj)),
+                str(artist) if artist else None,
+                str(getattr(obj, "upnp_class", "") or ""),
+            )
+        for cache in (self._titles, self._details):
+            while len(cache) > TITLE_CACHE_SIZE:
+                cache.pop(next(iter(cache)))
+
+    def details_for(self, object_id: str) -> tuple[str | None, str | None, str]:
+        """Cover URL, artist and UPnP class of an object as seen in a listing."""
+        return self._details.get(object_id, (None, None, ""))
 
     def title_for(self, object_id: str, meta_title: str | None = None) -> str | None:
         """Readable title of an object (never its raw object id, if avoidable)."""
