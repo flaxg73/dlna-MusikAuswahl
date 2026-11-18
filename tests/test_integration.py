@@ -887,3 +887,21 @@ async def test_radio_favorites_without_username(
     ws = await _ws_client(hass, hass_ws_client)
     result = (await ws("radio_favorites"))["result"]
     assert result == {"configured": False, "items": []}
+
+
+
+@pytest.mark.parametrize("broken", [False, True])
+async def test_stream_quality(hass: HomeAssistant, fake: FakeUpnp, broken) -> None:
+    """Stream details come from Info.Details, or from the DIDL <res> as fallback."""
+    await _setup(hass, fake)
+    fake.details_broken = broken
+    await _load(hass, "album1", "replace")
+    entity = _entity(hass)
+    await entity.async_update_ha_state(True)
+    attrs = hass.states.get(ENTITY).attributes
+    assert attrs["media_codec"] == "FLAC"
+    assert attrs["media_sample_rate"] == 96000
+    assert attrs["media_bit_depth"] == 24
+    assert attrs["media_lossless"] is True
+    if not broken:
+        assert attrs["media_bit_rate"] == 4608

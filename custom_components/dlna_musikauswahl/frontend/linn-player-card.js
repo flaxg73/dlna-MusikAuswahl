@@ -15,7 +15,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.7.1";
+const CARD_VERSION = "0.8.0";
 const FAVORITES_REFRESH = 10 * 60 * 1000;
 const MEDIUM = 480; // px width of the player area: controls side by side
 const ROOMY = 640; // bigger cover and buttons
@@ -42,6 +42,13 @@ const STRINGS = {
     playing: (n) => `📻 ${n} wird gespielt`,
     error: "Fehler",
     noEntity: "Bitte eine Linn-Player-Entität auswählen",
+    close: "Schließen",
+    previous: "Zuletzt gespielt",
+    upNext: "Als Nächstes",
+    shuffle: "Zufallswiedergabe aktiv",
+    lossless: "verlustfrei",
+    nowPlaying: "Läuft gerade",
+    openNowPlaying: "Vollbild anzeigen",
   },
   en: {
     off: "Standby",
@@ -63,7 +70,22 @@ const STRINGS = {
     playing: (n) => `📻 Playing ${n}`,
     error: "Error",
     noEntity: "Please select a Linn player entity",
+    close: "Close",
+    previous: "Previously played",
+    upNext: "Up next",
+    shuffle: "Shuffle is on",
+    lossless: "lossless",
+    nowPlaying: "Now playing",
+    openNowPlaying: "Show fullscreen",
   },
+};
+
+const fmtTime = (seconds) => {
+  seconds = Math.floor(seconds);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = String(seconds % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 };
 
 const esc = (value) =>
@@ -145,6 +167,7 @@ class LinnPlayerCard extends HTMLElement {
     if (this._playlist) this._playlist.hass = hass;
     if (this._library) this._library.hass = hass;
     this._update();
+    if (this._np) this._updateNowPlaying();
     const count = Number(this._config.radio_count) || 0;
     if (count > 0 && Date.now() - this._favoritesAt > FAVORITES_REFRESH) {
       this._favoritesAt = Date.now();
@@ -158,6 +181,7 @@ class LinnPlayerCard extends HTMLElement {
 
   disconnectedCallback() {
     this._resizeObserver?.disconnect();
+    this._closeNowPlaying();
     // leaving the dashboard closes the fullscreen selection
     this._library?._closeOverlay?.(false);
   }
@@ -184,8 +208,8 @@ class LinnPlayerCard extends HTMLElement {
         <div class="layout">
           <div class="left">
             <div class="player">
-              <div class="art"></div>
-              <div class="now-text"><div class="title"></div><div class="sub"></div></div>
+              <div class="art clickable" data-np title="${esc(t.openNowPlaying)}"></div>
+              <div class="now-text clickable" data-np title="${esc(t.openNowPlaying)}"><div class="title"></div><div class="sub"></div></div>
               <button class="icon power" data-action="power" title="${esc(t.power)}"><ha-icon icon="mdi:power"></ha-icon></button>
               <div class="source-row">
                 <ha-icon class="source-icon" icon="mdi:import"></ha-icon>
@@ -226,6 +250,7 @@ class LinnPlayerCard extends HTMLElement {
         this._onAction(el.dataset.action);
       })
     );
+    root.querySelectorAll("[data-np]").forEach((el) => el.addEventListener("click", () => this._openNowPlaying()));
     const select = root.querySelector(".source");
     select.addEventListener("change", () =>
       this._service("media_player", "select_source", { source: select.value })
@@ -488,6 +513,209 @@ class LinnPlayerCard extends HTMLElement {
     }
   }
 
+  // ------------------------------------------------- now playing (fullscreen)
+  _openNowPlaying() {
+    if (this._np || !this._stateObj) return;
+    const t = this._t;
+    const host = document.createElement("div");
+    host.className = "linn-now-playing";
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = `<style>${NP_STYLE}</style>
+      <div class="np">
+        <div class="bg"></div><div class="shade"></div>
+        <div class="top">
+          <button class="icon" data-np-action="close" title="${esc(t.close)}"><ha-icon icon="mdi:close"></ha-icon></button>
+          <div class="src"></div>
+          <span class="top-pad"></span>
+        </div>
+        <div class="content">
+          <div class="cover-wrap"><div class="cover"></div></div>
+          <div class="info">
+            <div class="label">${esc(t.nowPlaying)}</div>
+            <div class="t"></div>
+            <div class="a"></div>
+            <div class="al"></div>
+            <div class="quality"></div>
+            <div class="progress">
+              <span class="pos">0:00</span>
+              <div class="bar"><div class="fill"></div></div>
+              <span class="dur"></span>
+            </div>
+            <div class="controls">
+              <button class="icon" data-np-action="prev" title="${esc(t.prev)}"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
+              <button class="icon play" data-np-action="playpause" title="${esc(t.playPause)}"><ha-icon icon="mdi:play"></ha-icon></button>
+              <button class="icon" data-np-action="next" title="${esc(t.next)}"><ha-icon icon="mdi:skip-next"></ha-icon></button>
+            </div>
+            <div class="vol">
+              <button class="icon small mute" data-np-action="mute" title="${esc(t.mute)}"><ha-icon icon="mdi:volume-high"></ha-icon></button>
+              <button class="icon small" data-np-action="voldown" title="${esc(t.volDown)}"><ha-icon icon="mdi:minus"></ha-icon></button>
+              <input class="slider" type="range" min="0" max="100" step="1" value="0">
+              <button class="icon small" data-np-action="volup" title="${esc(t.volUp)}"><ha-icon icon="mdi:plus"></ha-icon></button>
+              <span class="vol-value"></span>
+            </div>
+            <div class="neighbours"></div>
+          </div>
+        </div>
+      </div>`;
+    root.querySelectorAll("[data-np-action]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const action = el.dataset.npAction;
+        if (action === "close") return this._closeNowPlaying();
+        this._onAction(action);
+      })
+    );
+    const slider = root.querySelector(".slider");
+    slider.addEventListener("input", () => {
+      this._npDragging = true;
+      root.querySelector(".vol-value").textContent = slider.value;
+      slider.style.setProperty("--value", `${slider.value}%`);
+    });
+    slider.addEventListener("change", () => {
+      this._npDragging = false;
+      this._service("media_player", "volume_set", { volume_level: Number(slider.value) / 100 });
+    });
+    root.querySelector(".bar").addEventListener("click", (ev) => {
+      const a = this._stateObj?.attributes || {};
+      if (!a.media_duration) return;
+      const rect = ev.currentTarget.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+      this._service("media_player", "media_seek", { seek_position: Math.round(ratio * a.media_duration) });
+    });
+    document.body.append(host);
+    this._np = { host, root, tracks: null, playlistKey: null };
+    this._npTimer = setInterval(() => this._updateProgress(), 1000);
+    this._updateNowPlaying();
+  }
+
+  _closeNowPlaying() {
+    if (!this._np) return;
+    clearInterval(this._npTimer);
+    const host = this._np.host;
+    this._np = null;
+    host.shadowRoot.querySelector(".np")?.classList.add("closing");
+    setTimeout(() => host.remove(), 180);
+  }
+
+  async _fetchNeighbours() {
+    if (!this._np) return;
+    try {
+      const result = await this._hass.callWS({ type: `${DOMAIN}/playlist`, entity_id: this._config.entity });
+      if (!this._np) return;
+      this._np.tracks = result.tracks || [];
+    } catch (err) {
+      if (this._np) this._np.tracks = [];
+    }
+    this._renderNeighbours();
+  }
+
+  _updateNowPlaying() {
+    const np = this._np;
+    const stateObj = this._stateObj;
+    if (!np || !stateObj) return;
+    const t = this._t;
+    const r = np.root;
+    const a = stateObj.attributes;
+    const state = stateObj.state;
+    const off = state === "off";
+    const title = off ? t.off : a.media_title || t.nothing;
+    r.querySelector(".t").textContent = title;
+    r.querySelector(".a").textContent = off ? "" : a.media_artist || "";
+    r.querySelector(".al").textContent = off ? "" : a.media_album_name || "";
+    r.querySelector(".src").textContent = a.source || "";
+    const picture = !off && a.entity_picture ? `url('${a.entity_picture}')` : "";
+    r.querySelector(".cover").style.backgroundImage = picture;
+    r.querySelector(".cover").classList.toggle("empty", !picture);
+    r.querySelector(".bg").style.backgroundImage = picture;
+
+    // stream quality
+    const chips = [];
+    if (a.media_codec) chips.push(a.media_codec);
+    if (a.media_bit_depth || a.media_sample_rate) {
+      const depth = a.media_bit_depth ? `${a.media_bit_depth} Bit` : "";
+      const rate = a.media_sample_rate ? `${(a.media_sample_rate / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} kHz` : "";
+      chips.push([depth, rate].filter(Boolean).join(" / "));
+    }
+    if (a.media_bit_rate) chips.push(`${a.media_bit_rate.toLocaleString()} kbit/s`);
+    if (a.media_lossless) chips.push(t.lossless);
+    r.querySelector(".quality").innerHTML = off ? "" : chips.map((c) => `<span class="chip">${esc(c)}</span>`).join("");
+
+    const playing = state === "playing" || state === "buffering";
+    r.querySelector(".play ha-icon").setAttribute("icon", playing ? "mdi:pause" : "mdi:play");
+    r.querySelectorAll(".controls button").forEach((b) => (b.disabled = off || state === "unavailable"));
+
+    const hasVolume = a.volume_level !== undefined;
+    r.querySelector(".vol").hidden = !hasVolume;
+    if (hasVolume && !this._npDragging) {
+      const value = Math.round((a.volume_level || 0) * 100);
+      const slider = r.querySelector(".slider");
+      slider.value = value;
+      slider.style.setProperty("--value", `${value}%`);
+      r.querySelector(".vol-value").textContent = String(value);
+      r.querySelector(".mute ha-icon").setAttribute("icon", a.is_volume_muted ? "mdi:volume-off" : "mdi:volume-high");
+    }
+    this._updateProgress();
+
+    // previous / next track of the playlist (only for the playlist source)
+    const key = `${a.playlist_version}|${a.current_track_id}`;
+    if (key !== np.playlistKey) {
+      np.playlistKey = key;
+      this._fetchNeighbours();
+    } else {
+      this._renderNeighbours();
+    }
+  }
+
+  _updateProgress() {
+    const np = this._np;
+    const stateObj = this._stateObj;
+    if (!np || !stateObj) return;
+    const a = stateObj.attributes;
+    const duration = Number(a.media_duration) || 0;
+    const progress = np.root.querySelector(".progress");
+    progress.hidden = !duration || stateObj.state === "off";
+    if (!duration) return;
+    let position = Number(a.media_position) || 0;
+    if (stateObj.state === "playing" && a.media_position_updated_at) {
+      position += (Date.now() - new Date(a.media_position_updated_at).getTime()) / 1000;
+    }
+    position = Math.min(duration, Math.max(0, position));
+    np.root.querySelector(".pos").textContent = fmtTime(position);
+    np.root.querySelector(".dur").textContent = fmtTime(duration);
+    np.root.querySelector(".fill").style.width = `${(position / duration) * 100}%`;
+  }
+
+  _renderNeighbours() {
+    const np = this._np;
+    if (!np) return;
+    const t = this._t;
+    const box = np.root.querySelector(".neighbours");
+    const a = this._stateObj?.attributes || {};
+    const playlistSource = !a.source || /playlist/i.test(a.source);
+    const tracks = np.tracks || [];
+    const index = tracks.findIndex((tr) => tr.id === a.current_track_id);
+    if (!playlistSource || index < 0) {
+      box.innerHTML = "";
+      return;
+    }
+    const card = (tr, label, extra = "") => {
+      if (!tr) return `<div class="nb empty"></div>`;
+      const thumb = tr.image
+        ? `<span class="nb-art" style="background-image:url('${esc(tr.image)}')"></span>`
+        : `<span class="nb-art placeholder"><ha-icon icon="mdi:music-note"></ha-icon></span>`;
+      const sub = [tr.artist, tr.album].filter(Boolean).join(" · ");
+      return `<button class="nb" data-track="${tr.id}">
+        ${thumb}<span class="nb-text"><span class="nb-label">${esc(label)}${extra}</span>
+        <span class="nb-title">${esc(tr.title)}</span><span class="nb-sub">${esc(sub)}</span></span></button>`;
+    };
+    const shuffle = a.shuffle ? ` · ${esc(t.shuffle)}` : "";
+    box.innerHTML = card(tracks[index - 1], t.previous) + card(tracks[index + 1], t.upNext, shuffle);
+    box.querySelectorAll(".nb[data-track]").forEach((el) =>
+      el.addEventListener("click", () =>
+        this._service(DOMAIN, "play_track", { track_id: Number(el.dataset.track) })
+      )
+    );
+  }
+
   _toast(text, error = false) {
     const el = this.shadowRoot.querySelector(".toast");
     if (!el) return;
@@ -515,6 +743,8 @@ const STYLE = `
             grid-template-columns: 64px minmax(0, 1fr) auto;
             grid-template-areas: "art text power" "source source source" "transport transport transport" "volume volume volume"; }
   .art { grid-area: art; }
+  .clickable { cursor: pointer; }
+  .art.clickable:hover { filter: brightness(0.92); }
   .now-text { grid-area: text; min-width: 0; }
   .power { grid-area: power; }
   .source-row { grid-area: source; }
@@ -600,6 +830,80 @@ const STYLE = `
   .toast.error { background: var(--error-color, #db4437); color: #fff; }
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+`;
+
+const NP_STYLE = `
+  .np { position: fixed; inset: 0; z-index: 1000; overflow: hidden; color: #fff; display: flex; flex-direction: column;
+        background: #111; animation: np-in 0.22s ease-out;
+        padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  .np.closing { animation: np-out 0.18s ease-in forwards; }
+  .bg { position: absolute; inset: -60px; background: center / cover no-repeat; filter: blur(48px) saturate(1.3) brightness(0.55);
+        transform: scale(1.1); transition: background-image 0.4s; }
+  .shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.25), rgba(0,0,0,0.6)); }
+  [hidden] { display: none !important; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
+  button:disabled { opacity: 0.35; cursor: default; }
+  .icon { width: 44px; height: 44px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: none;
+          --mdc-icon-size: 26px; transition: background 0.15s; }
+  .icon:not(:disabled):hover { background: rgba(255,255,255,0.14); }
+  .icon.small { width: 36px; height: 36px; --mdc-icon-size: 22px; }
+  .top { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+  .src { flex: 1; text-align: center; font-size: 0.85em; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.75; }
+  .top-pad { width: 44px; }
+  .content { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center;
+             gap: 18px; padding: 4px 24px 24px; overflow-y: auto; }
+  .cover-wrap { display: flex; justify-content: center; }
+  .cover { width: min(78vw, 46vh); aspect-ratio: 1; border-radius: 12px; background: rgba(255,255,255,0.08) center / cover no-repeat;
+           box-shadow: 0 20px 50px rgba(0,0,0,0.55); }
+  .cover.empty { background-image: none; }
+  .info { width: 100%; max-width: 560px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; }
+  .label { font-size: 0.75em; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.6; }
+  .t { font-size: 1.7em; font-weight: 600; line-height: 1.2; }
+  .a { font-size: 1.15em; opacity: 0.9; }
+  .al { font-size: 1em; opacity: 0.7; }
+  .quality { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 6px; min-height: 4px; }
+  .chip { font-size: 0.78em; padding: 3px 10px; border-radius: 12px; background: rgba(255,255,255,0.14);
+          border: 1px solid rgba(255,255,255,0.18); font-variant-numeric: tabular-nums; }
+  .progress { width: 100%; display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 0.8em;
+              font-variant-numeric: tabular-nums; opacity: 0.9; }
+  .bar { flex: 1; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.22); cursor: pointer; position: relative; }
+  .bar::before { content: ""; position: absolute; inset: -10px 0; }
+  .fill { height: 100%; border-radius: 3px; background: #fff; width: 0; transition: width 0.9s linear; }
+  .controls { display: flex; align-items: center; justify-content: center; gap: 28px; margin-top: 6px; }
+  .controls .icon { width: 56px; height: 56px; --mdc-icon-size: 36px; }
+  .controls .play { width: 76px; height: 76px; --mdc-icon-size: 46px; background: #fff; color: #111; }
+  .controls .play:not(:disabled):hover { background: #fff; filter: brightness(0.92); }
+  .vol { width: 100%; display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .slider { flex: 1; -webkit-appearance: none; appearance: none; height: 5px; border-radius: 3px; outline: none;
+            background: linear-gradient(to right, #fff var(--value, 0%), rgba(255,255,255,0.25) var(--value, 0%)); }
+  .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #fff; cursor: pointer; }
+  .slider::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: none; cursor: pointer; }
+  .vol-value { width: 30px; text-align: right; font-size: 0.85em; opacity: 0.85; font-variant-numeric: tabular-nums; }
+  .neighbours { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+  .neighbours:empty { display: none; }
+  .nb { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 12px; background: rgba(255,255,255,0.1);
+        text-align: left; min-width: 0; transition: background 0.15s; }
+  .nb:hover { background: rgba(255,255,255,0.18); }
+  .nb.empty { background: transparent; }
+  .nb-art { width: 44px; height: 44px; border-radius: 6px; flex: none; background: rgba(255,255,255,0.1) center / cover no-repeat;
+            display: flex; align-items: center; justify-content: center; --mdc-icon-size: 22px; }
+  .nb-text { display: flex; flex-direction: column; min-width: 0; }
+  .nb-label { font-size: 0.7em; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.6; }
+  .nb-title, .nb-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nb-title { font-weight: 500; }
+  .nb-sub { font-size: 0.8em; opacity: 0.7; }
+  @media (max-width: 420px) { .neighbours { grid-template-columns: 1fr; } .t { font-size: 1.45em; } .controls { gap: 18px; } }
+  /* landscape: cover left, everything else right */
+  @media (min-width: 800px) and (min-aspect-ratio: 5/4) {
+    .content { flex-direction: row; justify-content: center; align-items: center; gap: 56px; padding: 0 48px 32px; }
+    .cover { width: min(72vh, 44vw); }
+    .info { align-items: flex-start; text-align: left; max-width: 520px; }
+    .quality { justify-content: flex-start; }
+    .controls { justify-content: flex-start; }
+    .t { font-size: 2.1em; }
+  }
+  @keyframes np-in { from { opacity: 0; transform: scale(0.98); } }
+  @keyframes np-out { to { opacity: 0; transform: scale(0.98); } }
 `;
 
 if (!customElements.get("linn-player-card")) {
