@@ -342,6 +342,19 @@ class OpenHomeRenderer:
         result = await self._call(self.info, "Track")
         return str(result.get("Uri") or ""), str(result.get("Metadata") or "")
 
+    async def details(self) -> dict[str, Any] | None:
+        """Stream details of the current track (codec, bit rate, resolution)."""
+        if not self.has(self.info, "Details"):
+            return None
+        result = await self._call(self.info, "Details")
+        return {
+            "codec": str(result.get("CodecName") or "") or None,
+            "bit_rate": int(result.get("BitRate") or 0) or None,  # bit/s
+            "bit_depth": int(result.get("BitDepth") or 0) or None,
+            "sample_rate": int(result.get("SampleRate") or 0) or None,
+            "lossless": bool(result.get("Lossless")) if "Lossless" in result else None,
+        }
+
     async def position(self) -> tuple[int, int] | None:
         """Return (duration, seconds) of the current track."""
         if not self.has(self.time, "Time"):

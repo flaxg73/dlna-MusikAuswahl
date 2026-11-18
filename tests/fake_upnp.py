@@ -74,6 +74,8 @@ SERVICES: dict[str, dict[str, tuple[list[tuple[str, str]], list[tuple[str, str]]
     },
     f"{OH}Info:1": {
         "Track": ([], [("Uri", "string"), ("Metadata", "string")]),
+        "Details": ([], [("Duration", "ui4"), ("BitRate", "ui4"), ("BitDepth", "ui4"),
+                         ("SampleRate", "ui4"), ("Lossless", "boolean"), ("CodecName", "string")]),
     },
     f"{OH}Time:1": {
         "Time": ([], [("TrackCount", "ui4"), ("Duration", "ui4"), ("Seconds", "ui4")]),
@@ -335,6 +337,7 @@ class FakeUpnp:
             9: ("http://streams.example/fm4.mp3", "FM4"),
         }
         self.tunein_requests: list[str] = []
+        self.details_broken = False
         # renderer state
         self.playlist: list[tuple[int, str, str]] = []
         self.next_id = 1
@@ -670,6 +673,15 @@ class FakeUpnp:
             if i == self.current_id and self.source_index == 0:
                 return {"Uri": uri, "Metadata": metadata}
         return {"Uri": "", "Metadata": ""}
+
+    def _Info_Details(self):
+        if self.details_broken:
+            raise SoapFault(501, "Action failed")
+        if not self.current_id:
+            return {"Duration": 0, "BitRate": 0, "BitDepth": 0, "SampleRate": 0,
+                    "Lossless": 0, "CodecName": ""}
+        return {"Duration": 245, "BitRate": 4608000, "BitDepth": 24, "SampleRate": 96000,
+                "Lossless": 1, "CodecName": "FLAC"}
 
     def _Time_Time(self):
         return {"TrackCount": 0, "Duration": 245 if self.current_id else 0, "Seconds": 12}

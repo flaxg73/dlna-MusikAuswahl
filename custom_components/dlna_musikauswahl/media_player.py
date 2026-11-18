@@ -159,6 +159,37 @@ def media_class_for_upnp(upnp_class: str) -> MediaClass:
     return MediaClass.MUSIC
 
 
+CODECS = {
+    "flac": "FLAC", "x-flac": "FLAC", "wav": "WAV", "x-wav": "WAV", "wave": "WAV",
+    "l16": "PCM", "aiff": "AIFF", "x-aiff": "AIFF", "mpeg": "MP3", "mp3": "MP3",
+    "mp4": "AAC", "aac": "AAC", "x-m4a": "ALAC/AAC", "ogg": "Ogg", "vorbis": "Vorbis",
+    "opus": "Opus", "dsd": "DSD", "x-dsd": "DSD", "dsf": "DSD", "x-dsf": "DSD",
+}
+LOSSLESS = {"FLAC", "WAV", "PCM", "AIFF", "DSD"}
+
+
+def stream_info_from_res(obj: didl_lite.DidlObject) -> dict[str, Any]:
+    """Stream quality as far as the DIDL <res> tells it."""
+    res = next((r for r in getattr(obj, "res", None) or [] if r.uri), None)
+    if res is None:
+        return {}
+    info: dict[str, Any] = {}
+    parts = (res.protocol_info or "").split(":")
+    mime = parts[2].lower() if len(parts) > 2 else ""
+    if mime.startswith("audio/"):
+        sub = mime.split("/", 1)[1].split(";", 1)[0]
+        info["codec"] = CODECS.get(sub, sub.upper())
+        info["lossless"] = info["codec"] in LOSSLESS or None
+    for key, attr in (("sample_rate", "sample_frequency"), ("bit_depth", "bits_per_sample")):
+        value = getattr(res, attr, None)
+        if value and str(value).isdigit():
+            info[key] = int(value)
+    bitrate = getattr(res, "bitrate", None)
+    if bitrate and str(bitrate).isdigit():
+        info["bit_rate"] = int(bitrate) * 8  # DIDL: bytes per second
+    return info
+
+
 # ------------------------------------------------------------------------ setup
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -252,6 +283,8 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         self._playlist_active = True
         self._queue = PlaylistCache()
         self._current_id = 0
+        self._stream: dict[str, Any] | None = None
+        self._res_info: dict[str, Any] = {}
 
     async def async_added_to_hass(self) -> None:
         """Make the entity reachable for the websocket API of the card."""
@@ -354,6 +387,12 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             track = (entries[0].uri, entries[0].metadata) if entries else None
         self._update_track(track)
 
+        try:
+            self._stream = await renderer.details() if track and track[0] else None
+        except UpnpError as err:  # optional action, some renderers fail on it
+            _LOGGER.debug("Info.Details failed: %s", err)
+            self._stream = None
+
         position = await renderer.position()
         if position is not None and track and track[0]:
             duration, seconds = position
@@ -368,6 +407,8 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
 
     def _clear_media(self) -> None:
         self._last_track_key = None
+        self._stream = None
+        self._res_info = {}
         self._attr_media_title = None
         self._attr_media_artist = None
         self._attr_media_album_name = None
@@ -406,6 +447,7 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             if duration := parse_duration(res.duration):
                 self._attr_media_duration = duration
                 break
+        self._res_info = stream_info_from_res(obj)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -417,6 +459,24 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             "playlist_version": self._queue.version,
             "playlist_position": index + 1 if index is not None else None,
             "current_track_id": self._current_id or None,
+            **self._stream_attributes(),
+        }
+
+    def _stream_attributes(self) -> dict[str, Any]:
+        """Stream quality: from the renderer (Info.Details), else from the metadata."""
+        merged = {**getattr(self, "_res_info", {})}
+        for key, value in (getattr(self, "_stream", None) or {}).items():
+            if value not in (None, ""):
+                merged[key] = value
+        if not merged:
+            return {}
+        bit_rate = merged.get("bit_rate")
+        return {
+            "media_codec": merged.get("codec"),
+            "media_bit_rate": round(bit_rate / 1000) if bit_rate else None,  # kbit/s
+            "media_sample_rate": merged.get("sample_rate"),
+            "media_bit_depth": merged.get("bit_depth"),
+            "media_lossless": merged.get("lossless"),
         }
 
     # -------------------------------------------------------------- playlist

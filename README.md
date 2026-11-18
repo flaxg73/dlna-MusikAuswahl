@@ -106,6 +106,28 @@ Von oben nach unten:
   Zurück geht es mit ✕.
 - **Playlist** des Linn mit dem laufenden Titel, inklusive Speichern und Laden (siehe unten).
 
+**Vollbild „Läuft gerade“:** Ein Tipp auf Cover oder Titel oben in der Karte öffnet eine
+bildschirmfüllende Ansicht. Sie zeigt das große Cover vor unscharfem Cover-Hintergrund, Titel,
+Interpret und Album, die **Stream-Qualität** (z. B. „FLAC · 24 Bit / 96 kHz · 4.608 kbit/s ·
+verlustfrei“), einen Fortschrittsbalken (antippen springt an die Stelle), Zurück / Play-Pause /
+Vor, die Lautstärke und den **vorherigen und nächsten Titel** der Playlist. Ein Tipp darauf
+spielt den Titel. Hochkant ist alles untereinander angeordnet, quer steht das Cover links.
+Schließen mit ✕.
+
+Die Stream-Qualität fragt die Integration beim Linn ab (OpenHome `Info.Details`). Sie steht
+auch als Attribute `media_codec`, `media_bit_rate` (kbit/s), `media_sample_rate` (Hz),
+`media_bit_depth` und `media_lossless` an der Entität. Liefert der Player keine Details, werden
+die Angaben des Musikservers verwendet.
+
+Die Karte passt sich ihrer Breite an:
+- **schmal** (Handy): alles untereinander, die Senderkacheln lassen sich seitlich wischen
+- **mittel** (Tablet hochkant): Wiedergabe-Knöpfe und Lautstärke nebeneinander, Sender in Reihen
+- **breit** (Tablet quer, PC): zwei Spalten. Links Player, Sender und Musikauswahl, rechts die
+  Playlist in gleicher Höhe.
+
+In einer Ansicht vom Typ „Abschnitte“ nimmt die Karte standardmäßig die volle Breite ein. Du
+kannst sie dort auch schmaler ziehen, die Anordnung folgt automatisch.
+
 ### Playlists speichern und laden
 
 Der Linn hält nur eine Playlist. Mit 💾 in der Playlist-Anzeige (Player- und Playlist-Karte)
