@@ -115,6 +115,44 @@
           "description": "Neue Position (1 = Anfang)."
         }
       }
+    },
+    "save_playlist": {
+      "name": "Playlist speichern",
+      "description": "Speichert die aktuelle Playlist des Linn unter einem Namen in Home Assistant.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Name der Playlist. Ein vorhandener Eintrag mit diesem Namen wird überschrieben."
+        }
+      }
+    },
+    "load_playlist": {
+      "name": "Playlist laden",
+      "description": "Lädt eine gespeicherte Playlist in den Linn.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Name der gespeicherten Playlist."
+        },
+        "mode": {
+          "name": "Modus",
+          "description": "Ersetzen, hinten anhängen, als nächstes einreihen oder sofort abspielen."
+        },
+        "play": {
+          "name": "Wiedergabe starten",
+          "description": "Wiedergabe nach dem Laden starten (Standard: bei Ersetzen und Abspielen)."
+        }
+      }
+    },
+    "delete_playlist": {
+      "name": "Gespeicherte Playlist löschen",
+      "description": "Löscht eine gespeicherte Playlist.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Name der gespeicherten Playlist."
+        }
+      }
     }
   },
   "selector": {

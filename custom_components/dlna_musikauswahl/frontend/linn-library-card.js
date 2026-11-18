@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.6.7";
+const CARD_VERSION = "0.7.0";
 
 const STRINGS = {
   de: {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 from typing import Any
 from urllib.parse import quote, unquote, urlencode, urlparse
@@ -46,10 +47,13 @@ from .const import (
     MODE_NEXT,
     MODE_PLAY,
     MODE_REPLACE,
+    SERVICE_DELETE_PLAYLIST,
     SERVICE_LOAD_MEDIA,
+    SERVICE_LOAD_PLAYLIST,
     SERVICE_MOVE_TRACK,
     SERVICE_PLAY_TRACK,
     SERVICE_REMOVE_TRACKS,
+    SERVICE_SAVE_PLAYLIST,
     URI_SCHEME,
     URI_SCHEME_QUEUE,
     URI_SCHEME_RADIO,
@@ -75,6 +79,7 @@ _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=5)
 PARALLEL_UPDATES = 1
 SEARCH_LIMIT = 100
+FAVORITES_TTL = 300
 LIBRARY_PAGE_SIZE = 100
 
 _ENQUEUE_TO_MODE = {
@@ -191,6 +196,25 @@ async def async_setup_entry(
         },
         "async_move_track",
     )
+    platform.async_register_entity_service(
+        SERVICE_SAVE_PLAYLIST,
+        {vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=80))},
+        "async_save_playlist",
+    )
+    platform.async_register_entity_service(
+        SERVICE_LOAD_PLAYLIST,
+        {
+            vol.Required("name"): cv.string,
+            vol.Optional(ATTR_MODE, default=MODE_REPLACE): vol.In(LOAD_MODES),
+            vol.Optional(ATTR_PLAY): cv.boolean,
+        },
+        "async_load_playlist",
+    )
+    platform.async_register_entity_service(
+        SERVICE_DELETE_PLAYLIST,
+        {vol.Required("name"): cv.string},
+        "async_delete_playlist",
+    )
 
 
 class LinnPlaylistPlayer(MediaPlayerEntity):
@@ -209,6 +233,8 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
         self._max_tracks = data.max_tracks
         self._qobuz_udn = data.qobuz_udn
         self._tunein_username = data.tunein_username
+        self._saved = data.saved
+        self._favorites_cache: tuple[float, list[dict[str, Any]]] | None = None
         self._tunein: TuneInClient | None = None
         device = data.renderer.device
         self._attr_unique_id = data.renderer.udn
@@ -1211,3 +1237,82 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
             raise HomeAssistantError(f"Playing the station failed: {err}") from err
         self.async_schedule_update_ha_state(True)
         return 1
+
+    # ------------------------------------------------------- saved playlists
+    def saved_playlists(self) -> list[dict[str, Any]]:
+        """Summary of the saved playlists (for the cards)."""
+        if self._saved is None:
+            return []
+        return [
+            {**item, "image": self._art_url(item.get("image")) or item.get("image")}
+            for item in self._saved.summary()
+        ]
+
+    async def async_save_playlist(self, name: str) -> None:
+        """Service: save the current Linn playlist under a name."""
+        if self._saved is None:
+            raise HomeAssistantError("Saving playlists is not available")
+        name = name.strip()
+        try:
+            renderer = await self._async_renderer()
+            await self._queue.refresh(renderer)
+        except CONNECT_ERRORS as err:
+            self._renderer = None
+            raise HomeAssistantError(f"Linn renderer not reachable: {err}") from err
+        entries = self._queue.ordered()
+        if not entries:
+            raise ServiceValidationError("The Linn playlist is empty")
+        durations = [e.duration for e in entries if e.duration]
+        await self._saved.async_save(
+            name,
+            [{"uri": e.uri, "metadata": e.metadata} for e in entries],
+            sum(durations) if durations else None,
+            next((e.art for e in entries if e.art), None),
+        )
+
+    async def async_load_playlist(
+        self, name: str, mode: str = MODE_REPLACE, play: bool | None = None
+    ) -> None:
+        """Service: load a saved playlist into the Linn."""
+        await self.async_load_saved(name, mode, play)
+
+    async def async_load_saved(
+        self, name: str, mode: str = MODE_REPLACE, play: bool | None = None
+    ) -> int:
+        """Load a saved playlist and return the number of tracks."""
+        tracks = self._saved.tracks(name) if self._saved else None
+        if not tracks:
+            raise ServiceValidationError(f"No saved playlist named {name!r}")
+        try:
+            renderer = await self._async_renderer()
+            count = await renderer.load_tracks(
+                [PlaylistTrack(t["uri"], t["metadata"]) for t in tracks], mode, play
+            )
+        except CONNECT_ERRORS as err:
+            self._renderer = None
+            raise HomeAssistantError(f"Loading the playlist failed: {err}") from err
+        self.async_schedule_update_ha_state(True)
+        return count
+
+    async def async_delete_playlist(self, name: str) -> None:
+        """Service: delete a saved playlist."""
+        if self._saved is None or not await self._saved.async_delete(name):
+            raise ServiceValidationError(f"No saved playlist named {name!r}")
+
+    # -------------------------------------------------------- radio favourites
+    async def async_radio_favorites(self, limit: int) -> dict[str, Any]:
+        """The first TuneIn favourites, cached for a few minutes."""
+        if not self._tunein_username:
+            return {"configured": False, "items": []}
+        now = time.monotonic()
+        if self._favorites_cache is None or now - self._favorites_cache[0] > FAVORITES_TTL:
+            page = await self._async_radio_browse(
+                self._radio_id(
+                    "b", urlencode({"c": "presets", "username": self._tunein_username})
+                )
+            )
+            items = [c for c in page["children"] if c["kind"] == "radio"]
+            if page.get("message"):
+                return {"configured": True, "items": [], "message": page["message"]}
+            self._favorites_cache = (now, items)
+        return {"configured": True, "items": self._favorites_cache[1][:limit]}

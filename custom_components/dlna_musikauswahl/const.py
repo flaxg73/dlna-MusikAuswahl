@@ -51,9 +51,12 @@ SERVICE_LOAD_MEDIA: Final = "load_media"
 SERVICE_PLAY_TRACK: Final = "play_track"
 SERVICE_REMOVE_TRACKS: Final = "remove_tracks"
 SERVICE_MOVE_TRACK: Final = "move_track"
+SERVICE_SAVE_PLAYLIST: Final = "save_playlist"
+SERVICE_LOAD_PLAYLIST: Final = "load_playlist"
+SERVICE_DELETE_PLAYLIST: Final = "delete_playlist"
 
 FRONTEND_URL: Final = "/dlna_musikauswahl"
-CARDS: Final = ("linn-playlist-card.js", "linn-library-card.js")
-CARD_VERSION: Final = "0.6.7"
+CARDS: Final = ("linn-playlist-card.js", "linn-library-card.js", "linn-player-card.js")
+CARD_VERSION: Final = "0.7.0"
 ATTR_MODE: Final = "mode"
 ATTR_PLAY: Final = "play"

@@ -69,3 +69,51 @@ move_track:
           min: 1
           max: 1000
           mode: box
+
+save_playlist:
+  target:
+    entity:
+      integration: dlna_musikauswahl
+      domain: media_player
+  fields:
+    name:
+      required: true
+      example: "Sonntagmorgen"
+      selector:
+        text:
+
+load_playlist:
+  target:
+    entity:
+      integration: dlna_musikauswahl
+      domain: media_player
+  fields:
+    name:
+      required: true
+      example: "Sonntagmorgen"
+      selector:
+        text:
+    mode:
+      default: replace
+      selector:
+        select:
+          translation_key: mode
+          options:
+            - replace
+            - add
+            - next
+            - play
+    play:
+      selector:
+        boolean:
+
+delete_playlist:
+  target:
+    entity:
+      integration: dlna_musikauswahl
+      domain: media_player
+  fields:
+    name:
+      required: true
+      selector:
+        text:

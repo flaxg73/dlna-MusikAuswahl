@@ -472,6 +472,9 @@ async def test_card_is_served(hass: HomeAssistant, fake: FakeUpnp, hass_client) 
     resp = await client.get("/dlna_musikauswahl/linn-library-card.js")
     assert resp.status == 200
     assert "customElements.define(\"linn-library-card\"" in await resp.text()
+    resp = await client.get("/dlna_musikauswahl/linn-player-card.js")
+    assert resp.status == 200
+    assert "customElements.define(\"linn-player-card\"" in await resp.text()
 
 
 async def test_library_websocket(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> None:
@@ -819,3 +822,68 @@ async def test_readable_titles(hass: HomeAssistant, fake: FakeUpnp, hass_ws_clie
     entity = _entity(hass)
     page = await entity.async_browse_media("playlist", _cid("albums"))
     assert page.title == "Alben"
+
+
+async def test_saved_playlists(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> None:
+    """Save the Linn playlist in HA, list, load and delete it."""
+    await _setup(hass, fake)
+    await _load(hass, "album1", "replace")
+    await _load(hass, "album2-t1")
+
+    async def svc(service, **data):
+        await hass.services.async_call(
+            DOMAIN, service, {ATTR_ENTITY_ID: ENTITY, **data}, blocking=True
+        )
+        await hass.async_block_till_done()
+
+    await svc("save_playlist", name="Sonntag")
+    ws = await _ws_client(hass, hass_ws_client)
+    saved = (await ws("saved_playlists"))["result"]["playlists"]
+    assert [(p["name"], p["count"], p["duration"]) for p in saved] == [("Sonntag", 4, 980)]
+    assert saved[0]["image"]
+
+    await hass.services.async_call(
+        MP_DOMAIN, SERVICE_CLEAR_PLAYLIST, {ATTR_ENTITY_ID: ENTITY}, blocking=True
+    )
+    assert fake.playlist == []
+    await svc("load_playlist", name="Sonntag")
+    assert _order(fake) == ["album1-t1", "album1-t2", "album1-t3", "album2-t1"]
+    assert "<upnp:album>Album 1</upnp:album>" in fake.playlist[0][2]
+    assert fake.transport == "Playing"
+
+    result = await ws("load", media_content_id="saved:Sonntag", mode="add")
+    assert result["result"] == {"count": 4} and len(fake.playlist) == 8
+
+    await svc("delete_playlist", name="Sonntag")
+    assert (await ws("saved_playlists"))["result"]["playlists"] == []
+    with pytest.raises(Exception, match="No saved playlist"):
+        await svc("load_playlist", name="Sonntag")
+
+    await hass.services.async_call(
+        MP_DOMAIN, SERVICE_CLEAR_PLAYLIST, {ATTR_ENTITY_ID: ENTITY}, blocking=True
+    )
+    with pytest.raises(Exception, match="empty"):
+        await svc("save_playlist", name="Leer")
+
+
+async def test_radio_favorites_ws(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> None:
+    """The player card gets the first TuneIn favourites."""
+    await _setup(hass, fake, options={"tunein_username": "flo"})
+    ws = await _ws_client(hass, hass_ws_client)
+    result = (await ws("radio_favorites", limit=5))["result"]
+    assert result["configured"] and [i["title"] for i in result["items"]] == ["Radio Eins"]
+    assert result["items"][0]["image"].startswith("https://")
+    requests = len(fake.tunein_requests)
+    await ws("radio_favorites", limit=5)
+    assert len(fake.tunein_requests) == requests  # cached
+
+
+
+async def test_radio_favorites_without_username(
+    hass: HomeAssistant, fake: FakeUpnp, hass_ws_client
+) -> None:
+    """Without a TuneIn username the card shows a hint."""
+    await _setup(hass, fake)
+    ws = await _ws_client(hass, hass_ws_client)
+    result = (await ws("radio_favorites"))["result"]
+    assert result == {"configured": False, "items": []}

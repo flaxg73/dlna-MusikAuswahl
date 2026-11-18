@@ -10,7 +10,7 @@
  */
 
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.4.0";
+const CARD_VERSION = "0.7.0";
 
 const STRINGS = {
   de: {
@@ -37,6 +37,19 @@ const STRINGS = {
     notFound: "Entität gehört nicht zur Integration DLNA Musikauswahl",
     noEntity: "Bitte eine Linn-Player-Entität auswählen",
     error: "Fehler",
+    save: "Playlist speichern",
+    saved: "Gespeicherte Playlists",
+    saveName: "Name der Playlist",
+    saveDo: "Speichern",
+    savedOk: (n) => `„${n}“ gespeichert`,
+    overwrite: (n) => `Es gibt bereits eine Playlist „${n}“. Überschreiben?`,
+    noSaved: "Noch keine gespeicherten Playlists.",
+    loadReplace: "Laden (Playlist ersetzen)",
+    loadAdd: "Hinten anhängen",
+    deleteSaved: "Löschen",
+    deleteConfirm: (n) => `Gespeicherte Playlist „${n}“ löschen?`,
+    loadedOk: (n, c) => `„${n}“ geladen (${c} Titel)`,
+    close: "Schließen",
   },
   en: {
     playlist: "Playlist",
@@ -62,11 +75,30 @@ const STRINGS = {
     notFound: "Entity does not belong to the DLNA Musikauswahl integration",
     noEntity: "Please select a Linn player entity",
     error: "Error",
+    save: "Save playlist",
+    saved: "Saved playlists",
+    saveName: "Playlist name",
+    saveDo: "Save",
+    savedOk: (n) => `“${n}” saved`,
+    overwrite: (n) => `A playlist “${n}” already exists. Overwrite?`,
+    noSaved: "No saved playlists yet.",
+    loadReplace: "Load (replace playlist)",
+    loadAdd: "Append",
+    deleteSaved: "Delete",
+    deleteConfirm: (n) => `Delete saved playlist “${n}”?`,
+    loadedOk: (n, c) => `“${n}” loaded (${c} tracks)`,
+    close: "Close",
   },
 };
 
 const esc = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+const fmtDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleDateString();
+};
 
 const fmtDuration = (seconds) => {
   if (seconds == null || isNaN(seconds)) return "";
@@ -241,16 +273,24 @@ class LinnPlaylistCard extends HTMLElement {
     } else if (!stateObj) {
       body = `<div class="message warning">${esc(this._config.entity)}?</div>`;
     } else {
-      body = this._renderHeader(stateObj) + this._renderToolbar(title) + this._renderList();
+      body =
+        this._renderHeader(stateObj) + this._renderToolbar(title) + this._renderPanel() + this._renderList();
     }
     if (this._error) body += `<div class="message warning">${esc(this._error)}</div>`;
 
     const scroll = this.shadowRoot.querySelector(".list")?.scrollTop;
+    const typing = this.shadowRoot.activeElement?.classList?.contains("save-name");
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="${this._config._embedded ? "full" : ""}"><div class="body">${body}</div></ha-card>`;
     const list = this.shadowRoot.querySelector(".list");
     if (list) {
       list.style.maxHeight = this._config.max_height;
       if (scroll) list.scrollTop = scroll;
+    }
+    const input = this.shadowRoot.querySelector(".save-name");
+    if (input && (typing || this._focusSave)) {
+      input.focus();
+      if (this._focusSave) input.select();
+      this._focusSave = false;
     }
     this._bind();
   }
@@ -316,9 +356,134 @@ class LinnPlaylistCard extends HTMLElement {
         ${this._busy ? `<ha-icon class="spin" icon="mdi:loading"></ha-icon>` : ""}
         <button class="icon" data-action="locate" title="▶" ${this._currentId ? "" : "disabled"}>
           <ha-icon icon="mdi:crosshairs-gps"></ha-icon></button>
+        <button class="icon ${this._panel === "save" ? "active" : ""}" data-action="panel-save" title="${esc(t.save)}" ${this._tracks.length ? "" : "disabled"}>
+          <ha-icon icon="mdi:content-save-outline"></ha-icon></button>
+        <button class="icon ${this._panel === "load" ? "active" : ""}" data-action="panel-load" title="${esc(t.saved)}">
+          <ha-icon icon="mdi:playlist-star"></ha-icon></button>
         <button class="icon" data-action="edit" title="${esc(t.edit)}" ${this._tracks.length ? "" : "disabled"}>
           <ha-icon icon="mdi:pencil"></ha-icon></button>
       </div>`;
+  }
+
+  _renderPanel() {
+    const t = this._t;
+    const notice = this._notice
+      ? `<div class="notice ${this._notice.error ? "error" : ""}">${esc(this._notice.text)}</div>`
+      : "";
+    if (this._panel === "save") {
+      return `<div class="panel">
+        <div class="save-row">
+          <input class="save-name" type="text" enterkeyhint="done" maxlength="80" placeholder="${esc(t.saveName)}" value="${esc(this._saveName ?? "")}">
+          <button class="pill" data-action="save-do" ${this._busy ? "disabled" : ""}><ha-icon icon="mdi:content-save"></ha-icon>${esc(t.saveDo)}</button>
+          <button class="icon small" data-action="panel-close" title="${esc(t.close)}"><ha-icon icon="mdi:close"></ha-icon></button>
+        </div>${notice}</div>`;
+    }
+    if (this._panel === "load") {
+      const items = this._savedList;
+      let list;
+      if (items == null) list = `<div class="message"><ha-icon class="spin" icon="mdi:loading"></ha-icon></div>`;
+      else if (!items.length) list = `<div class="message small">${esc(t.noSaved)}</div>`;
+      else {
+        list = items
+          .map((pl) => {
+            const info = [t.tracks(pl.count), pl.duration ? fmtDuration(pl.duration) : "", fmtDate(pl.saved_at)]
+              .filter(Boolean)
+              .join(" · ");
+            const thumb = pl.image
+              ? `<div class="thumb" style="background-image:url('${esc(pl.image)}')"></div>`
+              : `<div class="thumb placeholder"><ha-icon icon="mdi:playlist-music"></ha-icon></div>`;
+            return `<div class="saved-row">${thumb}
+              <div class="sv-text"><div class="t">${esc(pl.name)}</div><div class="s">${esc(info)}</div></div>
+              <button class="icon small primary" data-action="saved-load" data-name="${esc(pl.name)}" title="${esc(t.loadReplace)}"><ha-icon icon="mdi:play-circle"></ha-icon></button>
+              <button class="icon small" data-action="saved-add" data-name="${esc(pl.name)}" title="${esc(t.loadAdd)}"><ha-icon icon="mdi:playlist-plus"></ha-icon></button>
+              <button class="icon small danger" data-action="saved-delete" data-name="${esc(pl.name)}" title="${esc(t.deleteSaved)}"><ha-icon icon="mdi:delete-outline"></ha-icon></button>
+            </div>`;
+          })
+          .join("");
+      }
+      return `<div class="panel"><div class="panel-head"><span>${esc(t.saved)}</span>
+        <button class="icon small" data-action="panel-close" title="${esc(t.close)}"><ha-icon icon="mdi:close"></ha-icon></button></div>
+        ${notice}<div class="saved-list">${list}</div></div>`;
+    }
+    return notice ? `<div class="panel">${notice}</div>` : "";
+  }
+
+  async _fetchSaved() {
+    try {
+      const result = await this._hass.callWS({ type: `${DOMAIN}/saved_playlists`, entity_id: this._config.entity });
+      this._savedList = result.playlists || [];
+    } catch (err) {
+      this._savedList = [];
+      this._showNotice(`${this._t.error}: ${err?.message || err}`, true);
+    }
+    this._render();
+  }
+
+  _showNotice(text, error = false) {
+    this._notice = { text, error };
+    clearTimeout(this._noticeTimer);
+    this._render();
+    this._noticeTimer = setTimeout(() => {
+      this._notice = null;
+      this._render();
+    }, 3500);
+  }
+
+  async _savePlaylist() {
+    const t = this._t;
+    const name = (this._saveName || "").trim();
+    if (!name) return this.shadowRoot.querySelector(".save-name")?.focus();
+    if (this._savedList == null) {
+      try {
+        const result = await this._hass.callWS({ type: `${DOMAIN}/saved_playlists`, entity_id: this._config.entity });
+        this._savedList = result.playlists || [];
+      } catch (err) {
+        this._savedList = [];
+      }
+    }
+    if (this._savedList.some((pl) => pl.name === name) && !confirm(t.overwrite(name))) return;
+    this._busy = true;
+    this._render();
+    try {
+      await this._hass.callService(DOMAIN, "save_playlist", { name }, { entity_id: this._config.entity });
+      this._panel = null;
+      this._savedList = null;
+      this._showNotice(t.savedOk(name));
+    } catch (err) {
+      this._showNotice(`${t.error}: ${err?.message || err}`, true);
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  async _loadSaved(name, mode) {
+    const t = this._t;
+    try {
+      const result = await this._hass.callWS({
+        type: `${DOMAIN}/load`,
+        entity_id: this._config.entity,
+        media_content_id: `saved:${name}`,
+        mode,
+      });
+      this._panel = null;
+      this._showNotice(t.loadedOk(name, result.count));
+      this._fetch(false);
+    } catch (err) {
+      this._showNotice(`${t.error}: ${err?.message || err}`, true);
+    }
+  }
+
+  async _deleteSaved(name) {
+    const t = this._t;
+    if (!confirm(t.deleteConfirm(name))) return;
+    try {
+      await this._hass.callService(DOMAIN, "delete_playlist", { name }, { entity_id: this._config.entity });
+      this._savedList = (this._savedList || []).filter((pl) => pl.name !== name);
+      this._render();
+    } catch (err) {
+      this._showNotice(`${t.error}: ${err?.message || err}`, true);
+    }
   }
 
   _renderList() {
@@ -376,7 +541,7 @@ class LinnPlaylistCard extends HTMLElement {
     root.querySelectorAll("button[data-action]").forEach((btn) =>
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        this._onAction(btn.dataset.action, Number(btn.dataset.id));
+        this._onAction(btn.dataset.action, Number(btn.dataset.id), btn.dataset);
       })
     );
     root.querySelectorAll(".row").forEach((row) =>
@@ -398,13 +563,47 @@ class LinnPlaylistCard extends HTMLElement {
         this._render();
       })
     );
+    const saveInput = root.querySelector(".save-name");
+    if (saveInput) {
+      saveInput.addEventListener("input", () => (this._saveName = saveInput.value));
+      saveInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") this._savePlaylist();
+        if (ev.key === "Escape") this._onAction("panel-close");
+      });
+    }
     root.querySelectorAll(".handle").forEach((handle) => handle.addEventListener("pointerdown", (ev) => this._dragStart(ev, handle)));
   }
 
-  _onAction(action, id) {
+  _onAction(action, id, data = {}) {
     const t = this._t;
     const index = this._tracks.findIndex((tr) => tr.id === id);
     switch (action) {
+      case "panel-save":
+        this._panel = this._panel === "save" ? null : "save";
+        if (this._panel) {
+          const now = new Date();
+          this._saveName = `Playlist ${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+          this._focusSave = true;
+        }
+        return this._render();
+      case "panel-load":
+        this._panel = this._panel === "load" ? null : "load";
+        if (this._panel) {
+          this._savedList = null;
+          this._fetchSaved();
+        }
+        return this._render();
+      case "panel-close":
+        this._panel = null;
+        return this._render();
+      case "save-do":
+        return this._savePlaylist();
+      case "saved-load":
+        return this._loadSaved(data.name, "replace");
+      case "saved-add":
+        return this._loadSaved(data.name, "add");
+      case "saved-delete":
+        return this._deleteSaved(data.name);
       case "prev":
         return this._mediaService("media_previous_track");
       case "next":
@@ -511,6 +710,22 @@ const STYLE = `
   ha-card { overflow: hidden; height: 100%; }
   .body { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   ha-card.full { border-radius: 0; box-shadow: none; border: none; }
+  .icon.active { color: var(--primary-color); background: rgba(var(--rgb-primary-color, 3,169,244), 0.12); }
+  .icon.primary { color: var(--primary-color); --mdc-icon-size: 26px; }
+  .panel { border-bottom: 1px solid var(--divider-color); padding: 8px 12px; background: var(--secondary-background-color, rgba(127,127,127,0.06)); }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; font-weight: 500; padding-left: 4px; }
+  .save-row { display: flex; align-items: center; gap: 8px; }
+  .save-name { flex: 1; min-width: 0; height: 36px; border-radius: 18px; border: 1px solid var(--divider-color); padding: 0 14px;
+               font: inherit; color: var(--primary-text-color); background: var(--card-background-color, #fff); outline: none; }
+  .save-name:focus { border-color: var(--primary-color); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px 0 10px; border-radius: 18px;
+          background: var(--primary-color); color: var(--text-primary-color, #fff); font-weight: 500; --mdc-icon-size: 18px; flex: none; }
+  .saved-list { max-height: 260px; overflow-y: auto; }
+  .saved-row { display: flex; align-items: center; gap: 10px; padding: 4px 0 4px 4px; }
+  .sv-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .notice { margin: 6px 4px 2px; font-size: 0.9em; color: var(--primary-color); }
+  .notice.error { color: var(--error-color, #db4437); }
+  .message.small { padding: 12px; font-size: 0.9em; }
   .full .header { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
   button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
   button:disabled { opacity: 0.35; cursor: default; }
