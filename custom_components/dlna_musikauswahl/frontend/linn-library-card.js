@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.6.3";
+const CARD_VERSION = "0.6.6";
 
 const STRINGS = {
   de: {
@@ -142,6 +142,8 @@ class LinnLibraryCard extends HTMLElement {
     this._cache = new Map();
     this._tab = "server";
     this._tabState = {};
+    this._navToken = 0;
+    this._pendingScroll = null;
     this._page = null;
     this._items = [];
     this._nextStart = null;
@@ -445,7 +447,7 @@ class LinnLibraryCard extends HTMLElement {
 
   _saveStack() {
     try {
-      localStorage.setItem(this._storageKey, JSON.stringify(this._stack.map(({ id, title, skip }) => ({ id, title, skip }))));
+      localStorage.setItem(this._storageKey, JSON.stringify(this._stack.map(({ id, title, skip, scroll }) => ({ id, title, skip, scroll }))));
     } catch (err) {
       /* storage not available */
     }
@@ -458,11 +460,14 @@ class LinnLibraryCard extends HTMLElement {
 
   async _open(id, push = true, title = null) {
     if (!this._hass || !this._config?.entity) return;
-    const scroll = this.shadowRoot.querySelector(".scroll")?.scrollTop || 0;
+    const token = ++this._navToken;
+    const scrollEl = this.shadowRoot.querySelector(".scroll");
     if (push) {
-      this._current.scroll = scroll;
-      this._stack.push({ id, title });
+      // remember where we were in the list we are leaving
+      if (scrollEl && this._page) this._current.scroll = scrollEl.scrollTop;
+      this._stack.push({ id, title, scroll: 0 });
     }
+    const target = push ? 0 : this._current.scroll || 0;
     this._searchOpen = false;
     this._results = null;
     this._menu = null;
@@ -474,7 +479,8 @@ class LinnLibraryCard extends HTMLElement {
       this._items = cached.items;
       this._nextStart = cached.nextStart;
       this._error = null;
-      this._render(this._current.scroll || 0);
+      this._render();
+      this._restoreScroll(target);
       return;
     }
     this._loading = true;
@@ -482,6 +488,7 @@ class LinnLibraryCard extends HTMLElement {
     this._render();
     try {
       const page = await this._ws("browse", { media_content_id: id, source: this._tab });
+      if (token !== this._navToken) return; // the user navigated on meanwhile
       // a single server: jump straight into it
       if (this._tab === "server" && id === null && page.children.length === 1 && this._stack.length === 1) {
         this._cache.set("", { page, items: page.children, nextStart: null });
@@ -492,12 +499,14 @@ class LinnLibraryCard extends HTMLElement {
       this._page = page;
       this._items = page.children;
       this._nextStart = page.next_start;
-      this._current.title = page.title;
+      // the title from the listing (clicked entry) wins over an empty page title
+      this._current.title = page.title || this._current.title;
       this._error = null;
       // hints like "Qobuz not configured" are not cached: the setup may change
       if (!page.message) this._cache.set(id ?? "", { page, items: this._items, nextStart: this._nextStart });
       this._saveStack();
     } catch (err) {
+      if (token !== this._navToken) return;
       this._error = err?.code === "not_found" ? this._t.notFound : err?.message || String(err);
       // stored path no longer valid: start from the top
       if (!push && this._stack.length > 1) {
@@ -507,26 +516,53 @@ class LinnLibraryCard extends HTMLElement {
         return this._open(null, false);
       }
     } finally {
-      this._loading = false;
+      if (token === this._navToken) this._loading = false;
     }
-    this._render(0);
+    this._render();
+    this._restoreScroll(target);
+  }
+
+  /* Scroll the list to a position. The list may still grow (images, paging
+     in long lists) and some webviews apply scrollTop only after layout, so the
+     position is applied again until it sticks or the user scrolls himself. */
+  _restoreScroll(position) {
+    this._pendingScroll = position > 0 ? position : null;
+    const apply = () => {
+      const el = this.shadowRoot.querySelector(".scroll");
+      if (!el) return;
+      if (this._pendingScroll == null) {
+        if (position <= 0) el.scrollTop = 0;
+        return;
+      }
+      const max = el.scrollHeight - el.clientHeight;
+      el.scrollTop = Math.min(this._pendingScroll, max);
+      // reached, or nothing more to load: done
+      if (max >= this._pendingScroll || this._nextStart == null) this._pendingScroll = null;
+    };
+    apply();
+    requestAnimationFrame(apply);
+    setTimeout(apply, 150);
   }
 
   async _loadMore() {
     if (this._loading || this._nextStart == null || !this._page) return;
+    const token = this._navToken;
+    const pageId = this._page.id;
     this._loading = true;
     this._render();
     try {
       const page = await this._ws("browse", { media_content_id: this._page.id, start: this._nextStart, source: this._tab });
+      if (token !== this._navToken || this._page?.id !== pageId) return;
       this._items = this._items.concat(page.children);
       this._nextStart = page.next_start;
       this._cache.set(this._current.id ?? "", { page: this._page, items: this._items, nextStart: this._nextStart });
     } catch (err) {
       this._error = err?.message || String(err);
     } finally {
-      this._loading = false;
+      if (token === this._navToken) this._loading = false;
     }
     this._render();
+    if (this._pendingScroll != null) this._restoreScroll(this._pendingScroll);
   }
 
   get _canBack() {
@@ -777,7 +813,7 @@ class LinnLibraryCard extends HTMLElement {
       <div class="hero">
         ${cover}
         <div class="hero-text">
-          <div class="hero-title">${esc(p.title)}</div>
+          <div class="hero-title">${esc(p.title || this._current.title || "")}</div>
           ${p.subtitle ? `<div class="hero-sub">${esc(p.subtitle)}</div>` : ""}
           <div class="hero-info">${esc(info.join(" · "))}</div>
           <div class="hero-actions">
@@ -881,6 +917,22 @@ class LinnLibraryCard extends HTMLElement {
 
   _bind() {
     const root = this.shadowRoot;
+    const scrollEl = root.querySelector(".scroll");
+    if (scrollEl) {
+      // keep the position of the current list up to date (used when coming back)
+      scrollEl.addEventListener(
+        "scroll",
+        () => {
+          if (this._pendingScroll == null && this._page && !this._loading && !this._searchOpen) {
+            this._current.scroll = scrollEl.scrollTop;
+          }
+        },
+        { passive: true }
+      );
+      const userScroll = () => (this._pendingScroll = null);
+      scrollEl.addEventListener("wheel", userScroll, { passive: true });
+      scrollEl.addEventListener("touchstart", userScroll, { passive: true });
+    }
     root.querySelectorAll("button[data-action]").forEach((btn) =>
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();

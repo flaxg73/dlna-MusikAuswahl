@@ -8,12 +8,22 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from async_upnp_client.exceptions import UpnpActionError, UpnpActionResponseError
+from async_upnp_client.exceptions import (
+    UpnpActionError,
+    UpnpActionResponseError,
+    UpnpError,
+)
 from async_upnp_client.profiles.dlna import DmsDevice
 from didl_lite import didl_lite
 from homeassistant.core import HomeAssistant
 
-from .const import MAX_RECURSION_DEPTH, SERVER_LOCATION, SERVER_NAME, SERVER_UDN
+from .const import (
+    MAX_RECURSION_DEPTH,
+    SERVER_LOCATION,
+    SERVER_NAME,
+    SERVER_UDN,
+    ST_MEDIA_SERVERS,
+)
 from .didl import (
     describe,
     is_container,
@@ -22,7 +32,7 @@ from .didl import (
     pick_audio_resource,
 )
 from .openhome import PlaylistTrack
-from .upnp import CONNECT_ERRORS, async_connect
+from .upnp import CONNECT_ERRORS, async_connect, async_find_by_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +40,7 @@ _LOGGER = logging.getLogger(__name__)
 # Asset, MinimServer and Linn/Kazoo Server all handle it well.
 METADATA_FILTER = "*"
 COLLECT_PAGE_SIZE = 200
+TITLE_CACHE_SIZE = 5000
 FILTER_SCAN_LIMIT = 5000
 
 
@@ -53,6 +64,9 @@ class MediaServer:
         self.location: str = config.get(SERVER_LOCATION, "")
         self._device: DmsDevice | None = None
         self._search_caps_loaded = False
+        # titles seen in listings: some servers (e.g. upmpdcli plugins) answer
+        # BrowseMetadata without a usable title, the listing has the real one
+        self._titles: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     @property
@@ -63,7 +77,25 @@ class MediaServer:
     async def _async_device(self) -> DmsDevice:
         async with self._lock:
             if self._device is None:
-                upnp_device, location = await async_connect(self.hass, self.location, self.udn)
+                try:
+                    upnp_device, location = await async_connect(
+                        self.hass, self.location, self.udn
+                    )
+                except UpnpError:
+                    found = await async_find_by_name(
+                        self.hass, self.name, self.location, ST_MEDIA_SERVERS
+                    )
+                    if found is None:
+                        raise
+                    upnp_device, location = found
+                    _LOGGER.warning(
+                        "Media server %s now answers with device id %s instead of %s "
+                        "(e.g. after recreating its container); using it. Select the new "
+                        "entry in the integration options to make this permanent",
+                        self.name,
+                        upnp_device.udn,
+                        self.udn,
+                    )
                 self.location = location
                 self._device = DmsDevice(upnp_device, None)
                 self.name = self._device.name or self.name
@@ -106,9 +138,26 @@ class MediaServer:
                 requested_count=count,
             )
             children = [o for o in result.result if isinstance(o, didl_lite.DidlObject)]
+            self._remember_titles(children)
             return BrowsePage(None, children, result.total_matches or len(children))
 
         return await self._async_retry(_browse)
+
+    def _remember_titles(self, objects: list[didl_lite.DidlObject]) -> None:
+        for obj in objects:
+            title = getattr(obj, "title", None)
+            if obj.id and title and title != obj.id:
+                self._titles[obj.id] = str(title)
+        while len(self._titles) > TITLE_CACHE_SIZE:
+            self._titles.pop(next(iter(self._titles)))
+
+    def title_for(self, object_id: str, meta_title: str | None = None) -> str | None:
+        """Readable title of an object (never its raw object id, if avoidable)."""
+        if object_id in self._titles:
+            return self._titles[object_id]
+        if meta_title and meta_title != object_id:
+            return meta_title
+        return None
 
     @property
     def can_search(self) -> bool:
@@ -175,6 +224,7 @@ class MediaServer:
                         "Search %r in %r on %s: %s results", criteria, cid, self.name, len(found)
                     )
                     if found:
+                        self._remember_titles(found)
                         return found
             return []
 

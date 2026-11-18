@@ -749,3 +749,70 @@ async def test_tunein_email_instead_of_username(
     )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"tunein_username": "tunein_email"}
+
+
+async def test_server_with_new_udn(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client) -> None:
+    """A recreated container announces a new UDN: the server is found by its name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Wohnzimmer", unique_id=RENDERER_UDN,
+        data={
+            CONF_RENDERER_LOCATION: f"{fake.base}/renderer.xml",
+            CONF_RENDERER_UDN: RENDERER_UDN, CONF_RENDERER_NAME: "Wohnzimmer",
+            CONF_SERVERS: [
+                {"udn": SERVER_UDN, "name": "MinimServer", "location": f"{fake.base}/server.xml"},
+                {"udn": "uuid:old-container", "name": "UpMpd-mediaserver",
+                 "location": f"{fake.base}/old-container.xml"},
+            ],
+        },
+    )
+    entry.add_to_hass(hass)
+    announced = SsdpServiceInfo(
+        ssdp_usn=f"{QOBUZ_UDN}::x", ssdp_st="urn:schemas-upnp-org:device:MediaServer:1",
+        ssdp_udn=QOBUZ_UDN, ssdp_location=f"{fake.base}/qobuz.xml",
+        upnp={"friendlyName": "UpMpd-mediaserver"},
+    )
+
+    async def by_st(hass, st):
+        return [announced] if st.endswith("MediaServer:1") else []
+
+    with patch("homeassistant.components.ssdp.async_get_discovery_info_by_st", by_st):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        ws = await _ws_client(hass, hass_ws_client)
+        qobuz = await ws("browse", source="qobuz")
+    assert qobuz["success"], qobuz
+    assert [c["title"] for c in qobuz["result"]["children"]] == ["Meine Alben"]
+
+
+async def test_options_mark_offline_server(hass: HomeAssistant, fake: FakeUpnp) -> None:
+    """An offline Qobuz entry is labelled and not re-added through the Qobuz field."""
+    entry = await _setup(hass, fake, qobuz=True)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    schema = result["data_schema"].schema
+    selector = next(v for k, v in schema.items() if k == "server_selection")
+    labels = [o["label"] for o in selector.config["options"]]
+    assert all("offline" in label for label in labels)  # nothing discovered in this test
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"server_selection": [SERVER_UDN], CONF_MAX_TRACKS: 500, "qobuz_server": QOBUZ_UDN},
+    )
+    await hass.async_block_till_done()
+    assert [s["udn"] for s in entry.options[CONF_SERVERS]] == [SERVER_UDN]
+
+
+
+@pytest.mark.parametrize("quirk", ["id_title", "error"])
+async def test_readable_titles(hass: HomeAssistant, fake: FakeUpnp, hass_ws_client, quirk) -> None:
+    """Folder titles come from the listing when BrowseMetadata has no usable title."""
+    await _setup(hass, fake)
+    fake.metadata_quirk = quirk
+    ws = await _ws_client(hass, hass_ws_client)
+    server = (await ws("browse", media_content_id=_cid("0")))["result"]
+    albums = (await ws("browse", media_content_id=server["children"][0]["id"]))["result"]
+    assert albums["title"] == "Alben"
+    album = (await ws("browse", media_content_id=albums["children"][0]["id"]))["result"]
+    assert album["title"] == "Album 1"
+    # HA media browser as well
+    entity = _entity(hass)
+    page = await entity.async_browse_media("playlist", _cid("albums"))
+    assert page.title == "Alben"
