@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.6.6";
+const CARD_VERSION = "0.6.7";
 
 const STRINGS = {
   de: {
@@ -143,7 +143,7 @@ class LinnLibraryCard extends HTMLElement {
     this._tab = "server";
     this._tabState = {};
     this._navToken = 0;
-    this._pendingScroll = null;
+    this._restore = null;
     this._page = null;
     this._items = [];
     this._nextStart = null;
@@ -447,7 +447,16 @@ class LinnLibraryCard extends HTMLElement {
 
   _saveStack() {
     try {
-      localStorage.setItem(this._storageKey, JSON.stringify(this._stack.map(({ id, title, skip, scroll }) => ({ id, title, skip, scroll }))));
+      localStorage.setItem(this._storageKey, JSON.stringify(
+          this._stack.map(({ id, title, skip, scroll, anchor, anchorOffset }) => ({
+            id,
+            title,
+            skip,
+            scroll,
+            anchor,
+            anchorOffset,
+          }))
+        ));
     } catch (err) {
       /* storage not available */
     }
@@ -463,11 +472,19 @@ class LinnLibraryCard extends HTMLElement {
     const token = ++this._navToken;
     const scrollEl = this.shadowRoot.querySelector(".scroll");
     if (push) {
-      // remember where we were in the list we are leaving
-      if (scrollEl && this._page) this._current.scroll = scrollEl.scrollTop;
+      // remember where we were in the list we are leaving: the pixel position
+      // and the clicked entry with its place on screen (more robust)
+      if (scrollEl && this._page) {
+        this._current.scroll = scrollEl.scrollTop;
+        const clicked = this._entryElement(id);
+        this._current.anchor = clicked ? id : null;
+        this._current.anchorOffset = clicked
+          ? clicked.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top
+          : 0;
+      }
       this._stack.push({ id, title, scroll: 0 });
     }
-    const target = push ? 0 : this._current.scroll || 0;
+    const target = push ? null : this._current;
     this._searchOpen = false;
     this._results = null;
     this._menu = null;
@@ -522,26 +539,47 @@ class LinnLibraryCard extends HTMLElement {
     this._restoreScroll(target);
   }
 
-  /* Scroll the list to a position. The list may still grow (images, paging
-     in long lists) and some webviews apply scrollTop only after layout, so the
-     position is applied again until it sticks or the user scrolls himself. */
-  _restoreScroll(position) {
-    this._pendingScroll = position > 0 ? position : null;
-    const apply = () => {
+  _entryElement(id) {
+    const scrollEl = this.shadowRoot.querySelector(".scroll");
+    if (!scrollEl || id == null) return null;
+    return [...scrollEl.querySelectorAll("[data-open]")].find((el) => el.dataset.open === id) || null;
+  }
+
+  /* Bring the list back to where the user left it: preferably the clicked
+     entry at its former place on screen, otherwise the pixel position. The
+     list may still grow (paging in long lists) and some webviews apply
+     scrollTop only after layout, so this is repeated until it sticks or the
+     user scrolls himself. */
+  _restoreScroll(entry) {
+    const position = entry?.scroll || 0;
+    const anchor = entry?.anchor || null;
+    if (!position && !anchor) {
+      this._restore = null;
       const el = this.shadowRoot.querySelector(".scroll");
-      if (!el) return;
-      if (this._pendingScroll == null) {
-        if (position <= 0) el.scrollTop = 0;
-        return;
+      if (el) el.scrollTop = 0;
+      return;
+    }
+    this._restore = { position, anchor, offset: entry.anchorOffset || 0 };
+    const apply = (last) => {
+      const restore = this._restore;
+      const el = this.shadowRoot.querySelector(".scroll");
+      if (!restore || !el) return;
+      const target = restore.anchor ? this._entryElement(restore.anchor) : null;
+      if (target) {
+        const delta =
+          target.getBoundingClientRect().top - el.getBoundingClientRect().top - restore.offset;
+        el.scrollTop += delta;
+      } else {
+        const max = el.scrollHeight - el.clientHeight;
+        el.scrollTop = Math.min(restore.position, max);
+        // not there yet and more can be loaded: the next "load more" retries
+        if (max < restore.position && this._nextStart != null) return;
       }
-      const max = el.scrollHeight - el.clientHeight;
-      el.scrollTop = Math.min(this._pendingScroll, max);
-      // reached, or nothing more to load: done
-      if (max >= this._pendingScroll || this._nextStart == null) this._pendingScroll = null;
+      if (last) this._restore = null;
     };
-    apply();
-    requestAnimationFrame(apply);
-    setTimeout(apply, 150);
+    apply(false);
+    requestAnimationFrame(() => apply(false));
+    setTimeout(() => apply(true), 200);
   }
 
   async _loadMore() {
@@ -562,7 +600,10 @@ class LinnLibraryCard extends HTMLElement {
       if (token === this._navToken) this._loading = false;
     }
     this._render();
-    if (this._pendingScroll != null) this._restoreScroll(this._pendingScroll);
+    if (this._restore) {
+      const { position, anchor, offset } = this._restore;
+      this._restoreScroll({ scroll: position, anchor, anchorOffset: offset });
+    }
   }
 
   get _canBack() {
@@ -923,13 +964,17 @@ class LinnLibraryCard extends HTMLElement {
       scrollEl.addEventListener(
         "scroll",
         () => {
-          if (this._pendingScroll == null && this._page && !this._loading && !this._searchOpen) {
+          if (!this._restore && this._page && !this._loading && !this._searchOpen) {
             this._current.scroll = scrollEl.scrollTop;
           }
         },
         { passive: true }
       );
-      const userScroll = () => (this._pendingScroll = null);
+      const userScroll = () => {
+        // the user moves on: forget the restore target and the old anchor
+        this._restore = null;
+        this._current.anchor = null;
+      };
       scrollEl.addEventListener("wheel", userScroll, { passive: true });
       scrollEl.addEventListener("touchstart", userScroll, { passive: true });
     }

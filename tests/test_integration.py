@@ -812,6 +812,9 @@ async def test_readable_titles(hass: HomeAssistant, fake: FakeUpnp, hass_ws_clie
     assert albums["title"] == "Alben"
     album = (await ws("browse", media_content_id=albums["children"][0]["id"]))["result"]
     assert album["title"] == "Album 1"
+    # cover and kind of the album page come from the listing as well
+    assert album["image"] and album["image"].startswith(f"/api/media_player_proxy/{ENTITY}")
+    assert album["kind"] == "album"
     # HA media browser as well
     entity = _entity(hass)
     page = await entity.async_browse_media("playlist", _cid("albums"))

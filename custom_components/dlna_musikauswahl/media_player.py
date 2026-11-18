@@ -132,8 +132,13 @@ def parse_content_id(content_id: str) -> tuple[str, str, int]:
 
 
 def media_class_for(obj: didl_lite.DidlObject) -> MediaClass:
+    """Map the UPnP class of an object onto a Home Assistant media class."""
+    return media_class_for_upnp(upnp_class_of(obj))
+
+
+def media_class_for_upnp(upnp_class: str) -> MediaClass:
     """Map an UPnP class onto a Home Assistant media class."""
-    upnp_class = upnp_class_of(obj)
+    upnp_class = upnp_class.strip().lower()
     if upnp_class.startswith("object.container.album"):
         return MediaClass.ALBUM
     if upnp_class.startswith("object.container.person"):
@@ -783,7 +788,9 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                 title = server.title_for(object_id, getattr(meta, "title", None)) or object_id
                 if is_container(meta):
                     container_class = media_class_for(meta)
-            if meta is not None and (art := server.absolute_url(album_art_uri(meta))):
+            art = server.absolute_url(album_art_uri(meta)) if meta is not None else None
+            art = art or server.details_for(object_id)[0]
+            if art:
                 thumbnail = self.get_browse_image_url(
                     MediaType.MUSIC, make_content_id(server.udn, object_id), art
                 )
@@ -973,6 +980,12 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                         kind = str(media_class_for(meta))
                 else:
                     title = server.title_for(object_id)
+                # fill gaps (e.g. upmpdcli plugins) with what the listing showed
+                cached_art, cached_artist, cached_class = server.details_for(object_id)
+                image = image or self._art_url(cached_art)
+                subtitle = subtitle or cached_artist
+                if kind == "directory" and cached_class.lower().startswith("object.container."):
+                    kind = str(media_class_for_upnp(cached_class))
             page = await server.async_browse(object_id, start, LIBRARY_PAGE_SIZE)
         except CONNECT_ERRORS as err:
             raise HomeAssistantError(f"Media server {server.name} not reachable: {err}") from err
