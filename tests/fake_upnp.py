@@ -338,6 +338,7 @@ class FakeUpnp:
         }
         self.tunein_requests: list[str] = []
         self.details_broken = False
+        self.random_searches = 0
         # renderer state
         self.playlist: list[tuple[int, str, str]] = []
         self.next_id = 1
@@ -735,6 +736,21 @@ class FakeUpnp:
         if "strict" in quirks and (SearchCriteria.startswith("(") or " or " in SearchCriteria
                                    or "derivedfrom" in SearchCriteria):
             raise SoapFault(708, "Unsupported or invalid search criteria")
+        if 'derivedfrom "object.item.audioItem"' in SearchCriteria and "contains" not in SearchCriteria:
+            # all audio items below the container (used for random playlists)
+            found, stack = [], [ContainerID]
+            while stack:
+                for child in lib.children.get(stack.pop(0), []):
+                    if lib.objects[child]["class"].startswith("object.container"):
+                        stack.append(child)
+                    elif lib.objects[child]["class"].startswith("object.item.audioItem"):
+                        found.append(child)
+            self.random_searches += 1
+            start, count = int(StartingIndex), int(RequestedCount) or len(found)
+            ids = found[start : start + count]
+            didl = "".join(lib.didl(i) for i in ids)
+            return {"Result": DIDL_OPEN + didl + "</DIDL-Lite>", "NumberReturned": len(ids),
+                    "TotalMatches": len(found), "UpdateID": 1}
         term = re.search(r'contains "([^"]*)"', SearchCriteria).group(1).lower()
         ids = [o for o, obj in lib.objects.items()
                if o != "0" and term in obj["title"].lower()][: int(RequestedCount) or None]

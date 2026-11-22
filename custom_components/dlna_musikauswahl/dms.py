@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -41,6 +43,10 @@ _LOGGER = logging.getLogger(__name__)
 # Asset, MinimServer and Linn/Kazoo Server all handle it well.
 METADATA_FILTER = "*"
 COLLECT_PAGE_SIZE = 200
+RANDOM_SEARCH = 'upnp:class derivedfrom "object.item.audioItem"'
+RANDOM_MAX_CONTAINERS = 150  # folders browsed at most when walking the tree
+RANDOM_MAX_POOL = 5000  # tracks kept for sampling while walking
+RANDOM_TIME_LIMIT = 25  # seconds
 TITLE_CACHE_SIZE = 5000
 FILTER_SCAN_LIMIT = 5000
 
@@ -361,6 +367,135 @@ class MediaServer:
             start += len(page.children)
             if not page.children or start >= page.total:
                 return
+
+    # ------------------------------------------------------------ random
+    async def async_random_tracks(self, container_id: str, count: int) -> list[PlaylistTrack]:
+        """Pick random tracks below a container (whole library, a genre, an artist …).
+
+        Servers that can search (MinimServer, Asset …) deliver all audio items
+        below the container, so random positions of that result are fetched.
+        Otherwise the folder tree is walked in random order (bounded by number
+        of folders and time) and the tracks found are sampled.
+        """
+        tracks = await self._async_random_by_search(container_id, count)
+        if len(tracks) < count:
+            seen = {t.uri for t in tracks}
+            walked = await self._async_random_by_walking(container_id, count)
+            tracks += [t for t in walked if t.uri not in seen][: count - len(tracks)]
+        random.shuffle(tracks)
+        return tracks[:count]
+
+    async def _async_search_page(
+        self, container_id: str, start: int, count: int
+    ) -> tuple[list[didl_lite.DidlObject], int] | None:
+        async def _search(dev: DmsDevice):
+            if not dev.has_search_directory:
+                return None
+            result = await dev.async_search_directory(
+                container_id,
+                RANDOM_SEARCH,
+                metadata_filter=METADATA_FILTER,
+                starting_index=start,
+                requested_count=count,
+            )
+            objects = [o for o in result.result if isinstance(o, didl_lite.DidlObject)]
+            return objects, result.total_matches
+
+        try:
+            return await self._async_retry(_search)
+        except (UpnpActionError, UpnpActionResponseError) as err:
+            _LOGGER.debug("Search for random tracks in %r rejected: %s", container_id, err)
+            return None
+
+    async def _async_random_by_search(self, container_id: str, count: int) -> list[PlaylistTrack]:
+        first = await self._async_search_page(container_id, 0, 1)
+        if first is None:
+            return []
+        objects, total = first
+        if not total:
+            # some servers do not report a total: take what one big page gives
+            page = await self._async_search_page(container_id, 0, RANDOM_MAX_POOL)
+            if page is None:
+                return []
+            pool = [t for o in page[0] if (t := self.to_track(o))]
+            return random.sample(pool, min(count, len(pool)))
+        if total <= count * 3:
+            # small selection: read it completely and shuffle
+            pool: list[PlaylistTrack] = []
+            for start in range(0, total, COLLECT_PAGE_SIZE):
+                page = await self._async_search_page(container_id, start, COLLECT_PAGE_SIZE)
+                if page is None:
+                    break
+                pool += [t for o in page[0] if (t := self.to_track(o))]
+            return random.sample(pool, min(count, len(pool)))
+        # large selection: fetch single items at random positions
+        positions = random.sample(range(total), min(total, count + count // 3))
+        semaphore = asyncio.Semaphore(4)
+
+        async def _one(position: int) -> PlaylistTrack | None:
+            async with semaphore:
+                page = await self._async_search_page(container_id, position, 1)
+            if not page or not page[0]:
+                return None
+            return self.to_track(page[0][0])
+
+        found = await asyncio.gather(*(_one(p) for p in positions), return_exceptions=True)
+        tracks: list[PlaylistTrack] = []
+        seen: set[str] = set()
+        for track in found:
+            if isinstance(track, PlaylistTrack) and track.uri not in seen:
+                seen.add(track.uri)
+                tracks.append(track)
+        _LOGGER.debug(
+            "Random tracks via search in %r on %s: %s of %s", container_id, self.name,
+            len(tracks), total,
+        )
+        return tracks[:count]
+
+    async def _async_random_by_walking(self, container_id: str, count: int) -> list[PlaylistTrack]:
+        deadline = time.monotonic() + RANDOM_TIME_LIMIT
+        frontier = [container_id]
+        pool: list[PlaylistTrack] = []
+        seen_tracks = 0
+        browsed = 0
+        while frontier and browsed < RANDOM_MAX_CONTAINERS and time.monotonic() < deadline:
+            current = frontier.pop(random.randrange(len(frontier)))
+            browsed += 1
+            try:
+                first = await self.async_browse(current, 0, COLLECT_PAGE_SIZE)
+            except CONNECT_ERRORS as err:
+                _LOGGER.debug("Browsing %r for random tracks failed: %s", current, err)
+                continue
+            pages = [first]
+            if first.total > COLLECT_PAGE_SIZE:
+                # big folder: one more page at a random position
+                start = random.randrange(COLLECT_PAGE_SIZE, first.total)
+                try:
+                    pages.append(await self.async_browse(current, start, COLLECT_PAGE_SIZE))
+                except CONNECT_ERRORS:
+                    pass
+            for page in pages:
+                for child in page.children:
+                    if is_container(child):
+                        frontier.append(child.id)
+                    elif track := self.to_track(child):
+                        # reservoir sampling keeps a uniform sample of everything seen
+                        seen_tracks += 1
+                        if len(pool) < RANDOM_MAX_POOL:
+                            pool.append(track)
+                        else:
+                            slot = random.randrange(seen_tracks)
+                            if slot < RANDOM_MAX_POOL:
+                                pool[slot] = track
+            # enough variety collected
+            if len(pool) >= count * 8 and browsed >= 10:
+                break
+        _LOGGER.debug(
+            "Random tracks by walking %r on %s: %s folders, %s tracks seen",
+            container_id, self.name, browsed, seen_tracks,
+        )
+        unique = list({t.uri: t for t in pool}.values())
+        return random.sample(unique, min(count, len(unique)))
 
     def to_track(self, obj: didl_lite.DidlObject) -> PlaylistTrack | None:
         """Convert a DIDL item into a playlist track."""

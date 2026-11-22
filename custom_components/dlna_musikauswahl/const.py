@@ -54,9 +54,11 @@ SERVICE_MOVE_TRACK: Final = "move_track"
 SERVICE_SAVE_PLAYLIST: Final = "save_playlist"
 SERVICE_LOAD_PLAYLIST: Final = "load_playlist"
 SERVICE_DELETE_PLAYLIST: Final = "delete_playlist"
+SERVICE_RANDOM_PLAYLIST: Final = "random_playlist"
+RANDOM_DEFAULT_COUNT: Final = 100
 
 FRONTEND_URL: Final = "/dlna_musikauswahl"
 CARDS: Final = ("linn-playlist-card.js", "linn-library-card.js", "linn-player-card.js")
-CARD_VERSION: Final = "0.8.0"
+CARD_VERSION: Final = "0.9.0"
 ATTR_MODE: Final = "mode"
 ATTR_PLAY: Final = "play"

@@ -60,6 +60,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, ws_load)
     websocket_api.async_register_command(hass, ws_saved_playlists)
     websocket_api.async_register_command(hass, ws_radio_favorites)
+    websocket_api.async_register_command(hass, ws_random)
     await _async_register_card(hass)
     return True
 
@@ -180,6 +181,31 @@ async def ws_load(
             return {"count": count}
 
         await _ws_run(connection, msg["id"], _load())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "dlna_musikauswahl/random",
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Optional("media_content_id"): vol.Any(None, str),
+        vol.Optional("count", default=100): vol.All(int, vol.Range(min=1, max=1000)),
+        vol.Optional("mode", default="replace"): vol.In(LOAD_MODES),
+    }
+)
+@websocket_api.async_response
+async def ws_random(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Create a random playlist from a server or folder."""
+    if entity := _ws_entity(hass, connection, msg, POLICY_CONTROL):
+
+        async def _random() -> dict[str, int]:
+            count = await entity.async_random(
+                msg.get("media_content_id"), msg["count"], msg["mode"]
+            )
+            return {"count": count}
+
+        await _ws_run(connection, msg["id"], _random())
 
 
 @websocket_api.websocket_command(

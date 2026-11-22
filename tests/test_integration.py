@@ -905,3 +905,36 @@ async def test_stream_quality(hass: HomeAssistant, fake: FakeUpnp, broken) -> No
     assert attrs["media_lossless"] is True
     if not broken:
         assert attrs["media_bit_rate"] == 4608
+
+
+
+@pytest.mark.parametrize("search", [True, False])
+async def test_random_playlist(
+    hass: HomeAssistant, fake: FakeUpnp, hass_ws_client, search
+) -> None:
+    """Random playlists from the whole library or a folder, with and without Search."""
+    await _setup(hass, fake)
+    if not search:
+        fake.search_quirks = {"unsupported"}
+    ws = await _ws_client(hass, hass_ws_client)
+
+    # whole library (606 tracks): 100 distinct tracks
+    result = await ws("random", media_content_id=_cid("0"), count=100)
+    assert result["success"], result
+    assert result["result"] == {"count": 100}
+    uris = [u for _, u, _ in fake.playlist]
+    assert len(uris) == 100 and len(set(uris)) == 100
+    assert fake.transport == "Playing"
+    assert (fake.random_searches > 0) is search
+
+    # restricted to a folder ("Alben": 6 tracks) -> only those, appended
+    result = await ws("random", media_content_id=_cid("albums"), count=100, mode="add")
+    assert result["result"] == {"count": 6}
+    assert all("/music/album" in u for _, u, _ in fake.playlist[100:])
+
+    # service, default: first server, whole library
+    await hass.services.async_call(
+        DOMAIN, "random_playlist", {ATTR_ENTITY_ID: ENTITY, "count": 20}, blocking=True
+    )
+    assert len(fake.playlist) == 20
+    assert len({u for _, u, _ in fake.playlist}) == 20

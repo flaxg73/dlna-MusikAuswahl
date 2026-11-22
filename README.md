@@ -235,6 +235,33 @@ playlist_panel: true                # optional
 Tipp: Lege Bibliothek- und Playlist-Karte nebeneinander (z. B. in einer Ansicht vom Typ
 „Abschnitte“ oder in einem `horizontal-stack`).
 
+### Zufalls-Playlist 🎲
+
+In der Bibliothek-Karte (Musik-Server und Qobuz) erstellt der Würfel 🎲 oben in der Kopfzeile
+eine Zufalls-Playlist **aus dem gerade geöffneten Ordner**. Du wählst die Anzahl (25 / 50 / 100 /
+200, Standard 100) und ob die Playlist ersetzt und gestartet oder hinten angehängt wird.
+
+- Auf der Startseite eines Servers kommen die Titel aus der **ganzen Sammlung**.
+- Zum **Eingrenzen** öffnest du vorher den passenden Ordner, z. B. *Genre → Jazz* oder einen
+  **Interpreten** (MinimServer, Asset und Qobuz bieten solche Ordner an). Alternativ wählst du im
+  ⋮-Menü eines Ordners **„Zufalls-Playlist hieraus“**, direkt in der Genre- oder
+  Interpretenliste.
+
+Kann der Server suchen (MinimServer, Asset …), holt die Integration gezielt zufällige Titel aus
+dem ganzen Ordnerbaum. Sonst (z. B. Qobuz über upmpdcli) durchstreift sie die Unterordner in
+zufälliger Reihenfolge, höchstens 150 Ordner bzw. 25 Sekunden lang, und wählt daraus zufällig aus.
+
+Für Automationen:
+
+```yaml
+action: dlna_musikauswahl.random_playlist
+target: { entity_id: media_player.wohnzimmer }
+data:
+  count: 100
+  media_content_id: "dlnamusik://…"   # optional: Server oder Ordner, leer = ganze Sammlung
+  mode: replace
+```
+
 ### Medienbrowser
 
 **Medienbrowser**: In der Seitenleiste *Medien* öffnen, unten rechts den Linn als Player

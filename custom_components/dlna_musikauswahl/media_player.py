@@ -47,11 +47,13 @@ from .const import (
     MODE_NEXT,
     MODE_PLAY,
     MODE_REPLACE,
+    RANDOM_DEFAULT_COUNT,
     SERVICE_DELETE_PLAYLIST,
     SERVICE_LOAD_MEDIA,
     SERVICE_LOAD_PLAYLIST,
     SERVICE_MOVE_TRACK,
     SERVICE_PLAY_TRACK,
+    SERVICE_RANDOM_PLAYLIST,
     SERVICE_REMOVE_TRACKS,
     SERVICE_SAVE_PLAYLIST,
     URI_SCHEME,
@@ -240,6 +242,17 @@ async def async_setup_entry(
             vol.Optional(ATTR_PLAY): cv.boolean,
         },
         "async_load_playlist",
+    )
+    platform.async_register_entity_service(
+        SERVICE_RANDOM_PLAYLIST,
+        {
+            vol.Optional("media_content_id"): cv.string,
+            vol.Optional("count", default=RANDOM_DEFAULT_COUNT): vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=1000)
+            ),
+            vol.Optional(ATTR_MODE, default=MODE_REPLACE): vol.In(LOAD_MODES),
+        },
+        "async_random_playlist",
     )
     platform.async_register_entity_service(
         SERVICE_DELETE_PLAYLIST,
@@ -1376,3 +1389,44 @@ class LinnPlaylistPlayer(MediaPlayerEntity):
                 return {"configured": True, "items": [], "message": page["message"]}
             self._favorites_cache = (now, items)
         return {"configured": True, "items": self._favorites_cache[1][:limit]}
+
+    # --------------------------------------------------------- random playlist
+    async def async_random_playlist(
+        self,
+        media_content_id: str | None = None,
+        count: int = RANDOM_DEFAULT_COUNT,
+        mode: str = MODE_REPLACE,
+    ) -> None:
+        """Service: fill the playlist with random tracks of a server or folder."""
+        await self.async_random(media_content_id, count, mode)
+
+    async def async_random(
+        self, media_content_id: str | None, count: int, mode: str = MODE_REPLACE
+    ) -> int:
+        """Random tracks below a server/folder into the playlist; returns the count."""
+        if media_content_id:
+            try:
+                udn, object_id, _start = parse_content_id(media_content_id)
+            except ValueError as err:
+                raise ServiceValidationError(str(err)) from err
+            server = self._server(udn)
+        else:
+            servers = [s for s in self._servers.values() if s.udn != self._qobuz_udn]
+            servers = servers or list(self._servers.values())
+            if not servers:
+                raise ServiceValidationError("No media server configured")
+            server, object_id = servers[0], "0"
+        try:
+            tracks = await server.async_random_tracks(object_id, min(count, 1000))
+        except CONNECT_ERRORS as err:
+            raise HomeAssistantError(f"Media server {server.name} not reachable: {err}") from err
+        if not tracks:
+            raise ServiceValidationError("No playable tracks found for a random playlist")
+        try:
+            renderer = await self._async_renderer()
+            loaded = await renderer.load_tracks(tracks, mode)
+        except CONNECT_ERRORS as err:
+            self._renderer = None
+            raise HomeAssistantError(f"Loading the playlist failed: {err}") from err
+        self.async_schedule_update_ha_state(True)
+        return loaded
