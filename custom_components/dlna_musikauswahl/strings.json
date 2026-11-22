@@ -153,6 +153,24 @@
           "description": "Name of the saved playlist."
         }
       }
+    },
+    "random_playlist": {
+      "name": "Create random playlist",
+      "description": "Fills the Linn playlist with random tracks of a media server or folder (e.g. a genre or an artist).",
+      "fields": {
+        "media_content_id": {
+          "name": "Server or folder",
+          "description": "Media id of a server or folder from the library (empty = whole collection of the first media server)."
+        },
+        "count": {
+          "name": "Number of tracks",
+          "description": "How many random tracks are loaded (default 100)."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Replace, append, play next or play now."
+        }
+      }
     }
   },
   "selector": {

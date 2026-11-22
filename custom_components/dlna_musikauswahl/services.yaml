@@ -117,3 +117,31 @@ delete_playlist:
       required: true
       selector:
         text:
+
+random_playlist:
+  target:
+    entity:
+      integration: dlna_musikauswahl
+      domain: media_player
+  fields:
+    media_content_id:
+      example: "dlnamusik://uuid%3A1234/genre%24jazz"
+      selector:
+        text:
+    count:
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 1000
+          mode: box
+    mode:
+      default: replace
+      selector:
+        select:
+          translation_key: mode
+          options:
+            - replace
+            - add
+            - next
+            - play

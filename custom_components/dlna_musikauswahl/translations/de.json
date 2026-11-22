@@ -153,6 +153,24 @@
           "description": "Name der gespeicherten Playlist."
         }
       }
+    },
+    "random_playlist": {
+      "name": "Zufalls-Playlist erstellen",
+      "description": "Füllt die Linn-Playlist mit zufälligen Titeln eines Musikservers oder eines Ordners (z. B. eines Genres oder Interpreten).",
+      "fields": {
+        "media_content_id": {
+          "name": "Server oder Ordner",
+          "description": "Medien-ID eines Servers oder Ordners aus der Bibliothek (leer = ganze Sammlung des ersten Musikservers)."
+        },
+        "count": {
+          "name": "Anzahl Titel",
+          "description": "Wie viele zufällige Titel geladen werden (Standard 100)."
+        },
+        "mode": {
+          "name": "Modus",
+          "description": "Ersetzen, hinten anhängen, als nächstes einreihen oder sofort abspielen."
+        }
+      }
     }
   },
   "selector": {

@@ -12,7 +12,7 @@
 
 (() => {
 const DOMAIN = "dlna_musikauswahl";
-const CARD_VERSION = "0.7.0";
+const CARD_VERSION = "0.9.0";
 
 const STRINGS = {
   de: {
@@ -45,6 +45,15 @@ const STRINGS = {
     noEntity: "Bitte eine Linn-Player-Entität auswählen",
     error: "Fehler",
     close: "Schließen",
+    random: "Zufalls-Playlist",
+    randomFrom: (n) => `aus „${n}“`,
+    randomHere: "Zufalls-Playlist hieraus",
+    randomCount: "Anzahl Titel",
+    randomReplace: "Ersetzen & abspielen",
+    randomAdd: "Anhängen",
+    randomBusy: "Titel werden zufällig ausgewählt …",
+    randomDone: (n) => `🎲 ${n} Zufallstitel geladen`,
+    randomHint: "Tipp: Öffne vorher ein Genre oder einen Interpreten, um die Auswahl einzugrenzen.",
     tabs: { server: "Musik-Server", qobuz: "Qobuz", radio: "Radio" },
     configuredServers: "In der Integration eingerichtete Server",
     presetsFailed:
@@ -90,6 +99,15 @@ const STRINGS = {
     noEntity: "Please select a Linn player entity",
     error: "Error",
     close: "Close",
+    random: "Random playlist",
+    randomFrom: (n) => `from “${n}”`,
+    randomHere: "Random playlist from here",
+    randomCount: "Number of tracks",
+    randomReplace: "Replace & play",
+    randomAdd: "Append",
+    randomBusy: "Picking random tracks …",
+    randomDone: (n) => `🎲 ${n} random tracks loaded`,
+    randomHint: "Tip: open a genre or an artist first to narrow the selection.",
     tabs: { server: "Music server", qobuz: "Qobuz", radio: "Radio" },
     configuredServers: "Servers set up in the integration",
     presetsFailed:
@@ -686,7 +704,7 @@ class LinnLibraryCard extends HTMLElement {
     if (!this._config.entity) body = `<div class="message">${esc(t.noEntity)}</div>`;
     else body = this._renderTabs() + this._renderNav() + `<div class="scroll">${this._renderContent()}</div>`;
 
-    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="${this._config._overlay ? "full" : ""}"><div class="body">${body}${this._renderMenu()}${
+    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card class="${this._config._overlay ? "full" : ""}"><div class="body">${body}${this._renderMenu()}${this._renderRandom()}${
       this._toast ? `<div class="toast ${this._toast.error ? "error" : ""}">${esc(this._toast.text)}</div>` : ""
     }</div></ha-card>`;
 
@@ -736,6 +754,7 @@ class LinnLibraryCard extends HTMLElement {
           <div class="name">${esc(title)}</div>
         </div>
         ${this._loading ? `<ha-icon class="spin" icon="mdi:loading"></ha-icon>` : ""}
+        ${this._canRandom ? `<button class="icon" data-action="random" title="${esc(t.random)}"><ha-icon icon="mdi:dice-multiple"></ha-icon></button>` : ""}
         <button class="icon" data-action="search" title="${esc(t.search)}"><ha-icon icon="mdi:magnify"></ha-icon></button>
         ${canBack ? `<button class="icon" data-action="home" title="${esc(t.home)}"><ha-icon icon="mdi:home-outline"></ha-icon></button>` : ""}
       </div>`;
@@ -929,6 +948,62 @@ class LinnLibraryCard extends HTMLElement {
       .join("")}</div>`;
   }
 
+  get _canRandom() {
+    const id = this._page?.id;
+    return this._tab !== "radio" && !this._searchOpen && typeof id === "string" && id.startsWith("dlnamusik://");
+  }
+
+  _renderRandom() {
+    const r = this._random;
+    if (!r) return "";
+    const t = this._t;
+    const counts = [25, 50, 100, 200];
+    const body = r.busy
+      ? `<div class="rp-busy"><ha-icon class="spin" icon="mdi:loading"></ha-icon><span>${esc(t.randomBusy)}</span></div>`
+      : `<div class="rp-label">${esc(t.randomCount)}</div>
+         <div class="rp-counts">${counts
+           .map((c) => `<button class="rp-count ${c === r.count ? "on" : ""}" data-action="random-count" data-count="${c}">${c}</button>`)
+           .join("")}</div>
+         <div class="rp-actions">
+           <button class="pill primary" data-action="random-go" data-mode="replace"><ha-icon icon="mdi:shuffle-variant"></ha-icon>${esc(t.randomReplace)}</button>
+           <button class="text primary" data-action="random-go" data-mode="add"><ha-icon icon="mdi:playlist-plus"></ha-icon>${esc(t.randomAdd)}</button>
+         </div>
+         ${r.root ? `<div class="rp-hint">${esc(t.randomHint)}</div>` : ""}`;
+    return `<div class="random-panel">
+      <div class="rp-head">
+        <ha-icon class="rp-icon" icon="mdi:dice-multiple"></ha-icon>
+        <div class="rp-title"><div class="t">${esc(t.random)}</div><div class="s">${esc(t.randomFrom(r.title || ""))}</div></div>
+        <button class="icon small" data-action="random-close" title="${esc(t.close)}" ${r.busy ? "disabled" : ""}><ha-icon icon="mdi:close"></ha-icon></button>
+      </div>${body}</div>`;
+  }
+
+  _openRandom(id, title, root = false) {
+    let count = 100;
+    try {
+      count = Number(localStorage.getItem("linn-library-card:random-count")) || 100;
+    } catch (err) {
+      /* storage not available */
+    }
+    this._menu = null;
+    this._random = { id, title, count, busy: false, root };
+    this._render();
+  }
+
+  async _runRandom(mode) {
+    const r = this._random;
+    if (!r || r.busy) return;
+    r.busy = true;
+    this._render();
+    try {
+      const result = await this._ws("random", { media_content_id: r.id, count: r.count, mode });
+      this._random = null;
+      this._showToast(this._t.randomDone(result.count));
+    } catch (err) {
+      this._random = null;
+      this._showToast(`${this._t.error}: ${err?.message || err}`, true);
+    }
+  }
+
   _renderMenu() {
     if (!this._menu) return "";
     const t = this._t;
@@ -942,6 +1017,7 @@ class LinnLibraryCard extends HTMLElement {
     return `
       <div class="menu" style="left:${x}px;top:${y}px">
         ${container ? `<button class="menu-item" data-action="open-from-menu" data-id="${esc(id)}"><ha-icon icon="mdi:folder-open-outline"></ha-icon>${esc(t.open)}</button>` : ""}
+        ${container && String(id).startsWith("dlnamusik://") ? `<button class="menu-item" data-action="random-from-menu" data-id="${esc(id)}"><ha-icon icon="mdi:dice-multiple"></ha-icon>${esc(t.randomHere)}</button>` : ""}
         ${entries
           .map(
             ([mode, icon, label]) =>
@@ -1023,7 +1099,7 @@ class LinnLibraryCard extends HTMLElement {
   _openMenu(id, clientX, clientY) {
     const card = this.shadowRoot.querySelector("ha-card").getBoundingClientRect();
     const width = 220;
-    const height = 230;
+    const height = 280;
     const x = Math.max(8, Math.min(clientX - card.left - width + 20, card.width - width - 8));
     const y = Math.max(8, Math.min(clientY - card.top, card.height - height - 8));
     this._menu = { id, x, y, container: !!this._findItem(id)?.container };
@@ -1061,6 +1137,28 @@ class LinnLibraryCard extends HTMLElement {
         const rect = btn.getBoundingClientRect();
         return this._openMenu(data.id, rect.right, rect.bottom);
       }
+      case "random": {
+        const page = this._page;
+        const root = /\/0$/.test(page.id) || !!page.root;
+        return this._openRandom(page.id, page.title || this._current.title, root);
+      }
+      case "random-from-menu":
+        return this._openRandom(data.id, this._findItem(data.id)?.title);
+      case "random-count":
+        if (this._random) {
+          this._random.count = Number(data.count);
+          try {
+            localStorage.setItem("linn-library-card:random-count", data.count);
+          } catch (err) {
+            /* storage not available */
+          }
+        }
+        return this._render();
+      case "random-go":
+        return this._runRandom(data.mode);
+      case "random-close":
+        this._random = null;
+        return this._render();
       case "open-from-menu":
         this._menu = null;
         return this._open(data.id, true, this._findItem(data.id)?.title);
@@ -1168,6 +1266,23 @@ const STYLE = `
   .menu-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 16px; text-align: left; --mdc-icon-size: 20px; }
   .menu-item ha-icon { color: var(--secondary-text-color); }
   .menu-item:hover { background: rgba(127,127,127,0.12); }
+  .random-panel { position: absolute; z-index: 5; top: 64px; left: 50%; transform: translateX(-50%);
+                  width: min(380px, calc(100% - 24px)); padding: 12px 14px 14px; border-radius: 14px;
+                  background: var(--card-background-color, #fff); box-shadow: 0 8px 30px rgba(0,0,0,0.35); }
+  .full .random-panel { top: 110px; }
+  .rp-head { display: flex; align-items: center; gap: 10px; }
+  .rp-icon { color: var(--primary-color); --mdc-icon-size: 28px; }
+  .rp-title { flex: 1; min-width: 0; }
+  .rp-title .t { font-weight: 500; font-size: 1.05em; }
+  .rp-label { margin: 14px 0 6px; font-size: 0.85em; color: var(--secondary-text-color); }
+  .rp-counts { display: flex; gap: 8px; }
+  .rp-count { flex: 1; height: 36px; border-radius: 18px; border: 1px solid var(--divider-color); font-weight: 500;
+              font-variant-numeric: tabular-nums; }
+  .rp-count.on { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
+  .rp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+  .rp-actions .text { display: inline-flex; align-items: center; gap: 6px; --mdc-icon-size: 20px; }
+  .rp-hint { margin-top: 12px; font-size: 0.8em; color: var(--secondary-text-color); line-height: 1.4; }
+  .rp-busy { display: flex; align-items: center; gap: 10px; padding: 18px 4px 6px; color: var(--secondary-text-color); }
   .toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100% - 32px);
            background: var(--primary-text-color); color: var(--card-background-color, #fff); padding: 9px 16px;
            border-radius: 18px; font-size: 0.9em; box-shadow: 0 4px 14px rgba(0,0,0,0.3); white-space: nowrap;
